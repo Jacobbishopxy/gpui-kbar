@@ -3,6 +3,9 @@ name = "core"
 version.workspace = true
 edition.workspace = true
 
+[lib]
+doctest = false
+
 [dependencies]
 anyhow.workspace = true
 thiserror.workspace = true

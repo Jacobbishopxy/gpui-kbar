@@ -15,8 +15,9 @@ polars = { version = "0.52", features = [
     "csv",
     "parquet",
     "dtype-datetime",
+    "timezones",
 ] }
-time = { version = "0.3", features = ["formatting", "macros"] }
+time = { version = "0.3", features = ["formatting", "macros", "parsing"] }
 anyhow = "1"
 thiserror = "2"
 clap = { version = "4.5", features = ["derive"] }
