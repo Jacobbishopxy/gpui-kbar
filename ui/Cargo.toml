@@ -5,3 +5,5 @@ edition.workspace = true
 
 [dependencies]
 core = { path = "../core" }
+gpui.workspace = true
+time.workspace = true

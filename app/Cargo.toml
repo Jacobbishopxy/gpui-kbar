@@ -6,3 +6,7 @@ edition.workspace = true
 [dependencies]
 core = { path = "../core" }
 ui = { path = "../ui" }
+gpui.workspace = true
+clap.workspace = true
+anyhow.workspace = true
+time.workspace = true
