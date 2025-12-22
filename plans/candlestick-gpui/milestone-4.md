@@ -12,6 +12,8 @@ What changed
 
 Next steps
 
-- Re-exported concise public API and removed the temporary `add` stub; UI/app call loaders/resampler.
-- Wired UI/app to load CSV/Parquet, compute bounds, optional resample, and render via gpui.
-- Re-introduce interactions (hover tooltip, pan/zoom, interval controls) incrementally with careful hit-testing; add axes/labels and error surfacing once rendering is stable.
+- Add interactive controls for interval/pan/zoom: track zoom/offset, hook drag/scroll handlers, and apply transforms in the render path.
+- Implement hover tooltips with hit-testing of candle bodies/wicks; render an overlay with candle data near the cursor.
+- Draw axes/labels (price/time) alongside existing gridlines to improve readability.
+- Surface load/empty-data errors in the UI (not just CLI bailouts); render an error view when loaders fail.
+- Add an in-app interval selector wired to `core::resample` so users can switch between raw/1m/5m/etc without restarting.
