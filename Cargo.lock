@@ -6946,6 +6946,7 @@ dependencies = [
 name = "ui"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
  "core",
  "gpui",
  "time",

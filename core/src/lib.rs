@@ -8,11 +8,6 @@ pub use load::{load_csv, load_parquet};
 pub use resample::{bounds, resample};
 pub use types::{Candle, ColumnMapping, Interval, LoadOptions};
 
-// Temporary stub retained for upstream callers; remove once UI/app fully adopt loaders.
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

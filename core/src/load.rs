@@ -1,9 +1,9 @@
 use crate::{Candle, ColumnMapping, LoadError, LoadOptions};
 use polars::datatypes::TimeUnit;
-use polars::prelude::*;
 use polars::prelude::PlPathRef;
+use polars::prelude::*;
 use std::path::Path;
-use time::{format_description::well_known::Rfc3339, OffsetDateTime};
+use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 pub fn load_csv(path: impl AsRef<Path>, options: LoadOptions) -> Result<Vec<Candle>, LoadError> {
     let pl_path = PlPathRef::from_local_path(path.as_ref()).into_owned();
@@ -62,7 +62,11 @@ fn parse_frame(df: DataFrame, columns: &ColumnMapping) -> Result<Vec<Candle>, Lo
         let volume = to_f64(volume.get(idx)?, &columns.volume, idx)?;
 
         if low > high {
-            return Err(LoadError::InvertedRange { row: idx, low, high });
+            return Err(LoadError::InvertedRange {
+                row: idx,
+                low,
+                high,
+            });
         }
 
         candles.push(Candle {
@@ -88,18 +92,18 @@ fn to_datetime(value: AnyValue, row: usize) -> Result<OffsetDateTime, LoadError>
                 value: format!("days since epoch: {days}"),
             })
         }
-        AnyValue::Int64(secs) => OffsetDateTime::from_unix_timestamp(secs).map_err(|_| {
-            LoadError::UnsupportedTimestamp {
+        AnyValue::Int64(secs) => {
+            OffsetDateTime::from_unix_timestamp(secs).map_err(|_| LoadError::UnsupportedTimestamp {
                 row,
                 value: secs.to_string(),
-            }
-        }),
-        AnyValue::String(s) => OffsetDateTime::parse(s, &Rfc3339).map_err(|err| {
-            LoadError::UnsupportedTimestamp {
+            })
+        }
+        AnyValue::String(s) => {
+            OffsetDateTime::parse(s, &Rfc3339).map_err(|err| LoadError::UnsupportedTimestamp {
                 row,
                 value: format!("{s} ({err})"),
-            }
-        }),
+            })
+        }
         AnyValue::StringOwned(s) => to_datetime(AnyValue::String(&s), row),
         other => Err(LoadError::UnsupportedTimestamp {
             row,
@@ -108,19 +112,17 @@ fn to_datetime(value: AnyValue, row: usize) -> Result<OffsetDateTime, LoadError>
     }
 }
 
-fn from_timestamp(
-    value: i64,
-    unit: TimeUnit,
-    row: usize,
-) -> Result<OffsetDateTime, LoadError> {
+fn from_timestamp(value: i64, unit: TimeUnit, row: usize) -> Result<OffsetDateTime, LoadError> {
     let nanos = match unit {
         TimeUnit::Nanoseconds => value,
         TimeUnit::Microseconds => value * 1_000,
         TimeUnit::Milliseconds => value * 1_000_000,
     };
-    OffsetDateTime::from_unix_timestamp_nanos(nanos as i128).map_err(|_| LoadError::UnsupportedTimestamp {
-        row,
-        value: format!("{value} ({unit:?})"),
+    OffsetDateTime::from_unix_timestamp_nanos(nanos as i128).map_err(|_| {
+        LoadError::UnsupportedTimestamp {
+            row,
+            value: format!("{value} ({unit:?})"),
+        }
     })
 }
 
