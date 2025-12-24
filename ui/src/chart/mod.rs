@@ -1,6 +1,8 @@
 use core::{Candle, Interval};
 use gpui::{App, Application, Bounds, WindowBounds, WindowOptions, prelude::*, px, size};
 
+mod canvas;
+mod header;
 mod view;
 
 use view::ChartView;

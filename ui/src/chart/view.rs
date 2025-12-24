@@ -1,9 +1,10 @@
-use core::{bounds, resample, Candle, Interval};
+use core::{Candle, Interval, bounds, resample};
 use gpui::{
-    BorderStyle, Bounds, Context, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
-    PathBuilder, Pixels, Render, ScrollWheelEvent, SharedString, Window, canvas, div, point,
-    prelude::*, px, quad, rgb, size, transparent_black,
+    Bounds, Context, Div, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels,
+    Render, ScrollWheelEvent, SharedString, Window, div, prelude::*, px, rgb,
 };
+
+use super::{canvas::chart_canvas, header::chart_header};
 
 use super::ChartMeta;
 
@@ -18,6 +19,8 @@ pub(super) struct ChartView {
     chart_bounds: Option<Bounds<Pixels>>,
     last_drag_position: Option<(f32, f32)>,
     dragging: bool,
+    hover_index: Option<usize>,
+    hover_position: Option<(f32, f32)>,
 }
 
 impl ChartView {
@@ -38,6 +41,8 @@ impl ChartView {
             chart_bounds: None,
             last_drag_position: None,
             dragging: false,
+            hover_index: None,
+            hover_position: None,
         }
     }
 
@@ -76,6 +81,137 @@ impl ChartView {
         let end = (start + visible).min(self.candles.len());
         (start, end)
     }
+
+    fn handle_scroll(&mut self, event: &ScrollWheelEvent, window: &mut Window) {
+        if self.candles.is_empty() {
+            return;
+        }
+        let delta = event.delta.pixel_delta(px(16.0));
+        let scroll_y = f32::from(delta.y);
+        if scroll_y.abs() < f32::EPSILON {
+            return;
+        }
+        let center = self.view_offset + self.visible_len() * 0.5;
+        let zoom_factor = if scroll_y < 0.0 { 1.1 } else { 0.9 };
+        self.zoom = (self.zoom * zoom_factor).clamp(1.0, self.candles.len() as f32);
+        let new_visible = self.visible_len();
+        let new_offset = center - new_visible * 0.5;
+        let visible_count = new_visible.round().max(1.0) as usize;
+        self.view_offset = self.clamp_offset(new_offset, visible_count);
+        window.refresh();
+    }
+
+    fn handle_hover(&mut self, event: &MouseMoveEvent, candle_count: usize) {
+        if let (Some(bounds), true) = (
+            self.chart_bounds,
+            !self.candles.is_empty() && candle_count > 0,
+        ) {
+            let bx = f32::from(bounds.origin.x);
+            let by = f32::from(bounds.origin.y);
+            let bw = f32::from(bounds.size.width);
+            let bh = f32::from(bounds.size.height);
+            let px = f32::from(event.position.x);
+            let py = f32::from(event.position.y);
+            if px >= bx && px <= bx + bw && py >= by && py <= by + bh {
+                let candle_width = (bw / candle_count as f32).max(1.0);
+                let local_x = (px - bx).max(0.0);
+                let local_idx = (local_x / candle_width).floor() as usize;
+                let start_idx = self.visible_range().0;
+                let idx = (start_idx + local_idx).min(self.candles.len().saturating_sub(1));
+                self.hover_index = Some(idx);
+                self.hover_position = Some((px, py));
+            } else {
+                self.hover_index = None;
+                self.hover_position = None;
+            }
+        }
+    }
+
+    fn handle_drag(&mut self, event: &MouseMoveEvent, window: &mut Window) {
+        if !self.dragging || self.candles.is_empty() {
+            window.refresh();
+            return;
+        }
+        if event.pressed_button != Some(MouseButton::Left) {
+            self.dragging = false;
+            self.last_drag_position = None;
+            window.refresh();
+            return;
+        }
+
+        if let Some((last_x, _)) = self.last_drag_position {
+            let dx = f32::from(event.position.x) - last_x;
+            let width = self
+                .chart_bounds
+                .map(|b| f32::from(b.size.width).max(1.0))
+                .unwrap_or(1.0);
+            let visible = self.visible_len();
+            if visible > 0.0 {
+                let candles_per_px = visible / width.max(1e-3);
+                let new_offset = self.view_offset - dx * candles_per_px;
+                let visible_count = visible.round().max(1.0) as usize;
+                self.view_offset = self.clamp_offset(new_offset, visible_count);
+            }
+        }
+
+        self.last_drag_position = Some((f32::from(event.position.x), f32::from(event.position.y)));
+        window.refresh();
+    }
+
+    fn tooltip_overlay(&self, start: usize, end: usize) -> Option<Div> {
+        let (idx, (mx, my), bounds) = (self.hover_index?, self.hover_position?, self.chart_bounds?);
+        let candle = self.candles.get(idx)?;
+        if idx < start || idx >= end {
+            return None;
+        }
+
+        let origin_x = f32::from(bounds.origin.x);
+        let origin_y = f32::from(bounds.origin.y);
+        let max_x = origin_x + f32::from(bounds.size.width);
+        let max_y = origin_y + f32::from(bounds.size.height);
+        let mut x = mx + 12.0;
+        let mut y = my + 12.0;
+        let tip_width = 180.0;
+        let tip_height = 88.0;
+        if x + tip_width > max_x {
+            x = (max_x - tip_width).max(origin_x);
+        }
+        if y + tip_height > max_y {
+            y = (max_y - tip_height).max(origin_y);
+        }
+
+        let ts = candle.timestamp;
+        let idx_line = format!("#{idx}");
+        let o_line = format!("O: {:.4}", candle.open);
+        let h_line = format!("H: {:.4}", candle.high);
+        let l_line = format!("L: {:.4}", candle.low);
+        let c_line = format!("C: {:.4}", candle.close);
+        let v_line = format!("V: {:.2}", candle.volume);
+
+        Some(
+            div()
+                .absolute()
+                .left(px(x))
+                .top(px(y))
+                .bg(rgb(0x111827))
+                .border_1()
+                .border_color(rgb(0x1f2937))
+                .rounded_md()
+                .shadow_lg()
+                .p_2()
+                .text_xs()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .child(ts.to_string())
+                .child(idx_line)
+                .child(o_line)
+                .child(h_line)
+                .child(l_line)
+                .child(c_line)
+                .child(v_line),
+        )
+    }
 }
 
 impl Render for ChartView {
@@ -92,35 +228,27 @@ impl Render for ChartView {
         self.price_min = price_min;
         self.price_max = price_max;
         let range_text = SharedString::from(format!("{:.4} - {:.4}", price_min, price_max));
+        let tooltip = self.tooltip_overlay(start, end);
 
         let candles = visible.to_vec();
         let price_min = self.price_min;
         let price_max = self.price_max;
+        let hover_local = self.hover_index.and_then(|idx| {
+            if start <= idx && idx < end {
+                Some(idx - start)
+            } else {
+                None
+            }
+        });
 
-        let track_bounds =
-            _cx.processor(|this: &mut Self, bounds: Vec<Bounds<Pixels>>, _, _| {
-                if let Some(chart_bounds) = bounds.get(1) {
-                    this.chart_bounds = Some(*chart_bounds);
-                }
-            });
+        let track_bounds = _cx.processor(|this: &mut Self, bounds: Vec<Bounds<Pixels>>, _, _| {
+            if let Some(chart_bounds) = bounds.get(1) {
+                this.chart_bounds = Some(*chart_bounds);
+            }
+        });
 
         let handle_scroll = _cx.listener(|this: &mut Self, event: &ScrollWheelEvent, window, _| {
-            if this.candles.is_empty() {
-                return;
-            }
-            let delta = event.delta.pixel_delta(px(16.0));
-            let scroll_y = f32::from(delta.y);
-            if scroll_y.abs() < f32::EPSILON {
-                return;
-            }
-            let center = this.view_offset + this.visible_len() * 0.5;
-            let zoom_factor = if scroll_y < 0.0 { 1.1 } else { 0.9 };
-            this.zoom = (this.zoom * zoom_factor).clamp(1.0, this.candles.len() as f32);
-            let new_visible = this.visible_len();
-            let new_offset = center - new_visible * 0.5;
-            let visible_count = new_visible.round().max(1.0) as usize;
-            this.view_offset = this.clamp_offset(new_offset, visible_count);
-            window.refresh();
+            this.handle_scroll(event, window);
         });
 
         let handle_mouse_down =
@@ -140,118 +268,16 @@ impl Render for ChartView {
         });
 
         let handle_mouse_move =
-            _cx.listener(|this: &mut Self, event: &MouseMoveEvent, window, _| {
-                if !this.dragging || this.candles.is_empty() {
-                    return;
-                }
-                if event.pressed_button != Some(MouseButton::Left) {
-                    this.dragging = false;
-                    this.last_drag_position = None;
-                    return;
-                }
-
-                if let Some((last_x, _)) = this.last_drag_position {
-                    let dx = f32::from(event.position.x) - last_x;
-                    let width = this
-                        .chart_bounds
-                        .map(|b| f32::from(b.size.width).max(1.0))
-                        .unwrap_or(1.0);
-                    let visible = this.visible_len();
-                    if visible > 0.0 {
-                        let candles_per_px = visible / width.max(1e-3);
-                        let new_offset =
-                            this.view_offset - dx * candles_per_px;
-                        let visible_count = visible.round().max(1.0) as usize;
-                        this.view_offset = this.clamp_offset(new_offset, visible_count);
-                    }
-                }
-
-                this.last_drag_position =
-                    Some((f32::from(event.position.x), f32::from(event.position.y)));
-                window.refresh();
+            _cx.listener(move |this: &mut Self, event: &MouseMoveEvent, window, _| {
+                this.handle_hover(event, candle_count);
+                this.handle_drag(event, window);
             });
 
-        let chart = canvas(
-            move |_, _, _| candles.clone(),
-            move |bounds, candles, window, _| {
-                window.paint_quad(quad(
-                    bounds,
-                    px(0.),
-                    rgb(0x0b1220),
-                    px(0.),
-                    transparent_black(),
-                    BorderStyle::default(),
-                ));
+        let chart = chart_canvas(candles, price_min, price_max, hover_local)
+            .flex_1()
+            .w_full();
 
-                let width = f32::from(bounds.size.width);
-                let height = f32::from(bounds.size.height);
-                let ox = f32::from(bounds.origin.x);
-                let oy = f32::from(bounds.origin.y);
-                if candles.is_empty() || height <= 0.0 || width <= 0.0 {
-                    return;
-                }
-
-                let range = (price_max - price_min).max(1e-9);
-                let candle_width = (width / candles.len() as f32).max(1.0);
-                let body_width = (candle_width * 0.6).max(1.0);
-
-                let price_to_y = |price: f64| -> f32 {
-                    let normalized = ((price - price_min) / range).clamp(0.0, 1.0);
-                    oy + (1.0 - normalized as f32) * height
-                };
-
-                // gridlines (min/mid/max)
-                for frac in [0.0f32, 0.5, 1.0] {
-                    let y = oy + height * (1.0 - frac);
-                    let mut builder = PathBuilder::stroke(px(1.));
-                    builder.move_to(point(px(ox), px(y)));
-                    builder.line_to(point(px(ox + width), px(y)));
-                    if let Ok(path) = builder.build() {
-                        window.paint_path(path, rgb(0x1f2937));
-                    }
-                }
-
-                for (idx, candle) in candles.iter().enumerate() {
-                    let x = ox + idx as f32 * candle_width + candle_width * 0.5;
-                    let open_y = price_to_y(candle.open);
-                    let close_y = price_to_y(candle.close);
-                    let high_y = price_to_y(candle.high);
-                    let low_y = price_to_y(candle.low);
-
-                    let body_top = open_y.min(close_y);
-                    let body_height = (open_y - close_y).abs().max(1.0);
-                    let color = if candle.close >= candle.open {
-                        rgb(0x22c55e)
-                    } else {
-                        rgb(0xef4444)
-                    };
-
-                    let mut builder = PathBuilder::stroke(px(1.));
-                    builder.move_to(point(px(x), px(high_y)));
-                    builder.line_to(point(px(x), px(low_y)));
-                    if let Ok(path) = builder.build() {
-                        window.paint_path(path, rgb(0xe5e7eb));
-                    }
-
-                    let body_bounds = Bounds {
-                        origin: point(px(x - body_width * 0.5), px(body_top)),
-                        size: size(px(body_width), px(body_height)),
-                    };
-                    window.paint_quad(quad(
-                        body_bounds,
-                        px(2.),
-                        color,
-                        px(0.),
-                        color,
-                        BorderStyle::default(),
-                    ));
-                }
-            },
-        )
-        .flex_1()
-        .w_full();
-
-        let chart_area = div()
+        let mut chart_area = div()
             .flex_1()
             .flex()
             .w_full()
@@ -260,6 +286,9 @@ impl Render for ChartView {
             .on_mouse_up(MouseButton::Left, handle_mouse_up)
             .on_scroll_wheel(handle_scroll)
             .child(chart);
+        if let Some(tip) = tooltip {
+            chart_area = chart_area.child(tip);
+        }
 
         div()
             .flex()
@@ -267,30 +296,12 @@ impl Render for ChartView {
             .size_full()
             .bg(rgb(0x0b1220))
             .text_color(gpui::white())
-            .child(
-                div()
-                    .flex()
-                    .justify_between()
-                    .items_center()
-                    .p_3()
-                    .bg(rgb(0x111827))
-                    .border_b_1()
-                    .border_color(rgb(0x1f2937))
-                    .child(
-                        div()
-                            .text_sm()
-                            .child(SharedString::from(self.source.clone())),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .gap_3()
-                            .text_sm()
-                            .child(format!("interval: {interval_label}"))
-                            .child(format!("candles: {candle_count}"))
-                            .child(format!("range: {range_text}")),
-                    ),
-            )
+            .child(chart_header(
+                &self.source,
+                interval_label,
+                candle_count,
+                range_text,
+            ))
             .on_children_prepainted(track_bounds)
             .child(chart_area)
     }
