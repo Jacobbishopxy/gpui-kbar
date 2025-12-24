@@ -1,6 +1,7 @@
 use core::{bounds, resample, Candle, Interval};
 use gpui::{
-    BorderStyle, Bounds, Context, PathBuilder, Render, SharedString, Window, canvas, div, point,
+    BorderStyle, Bounds, Context, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
+    PathBuilder, Pixels, Render, ScrollWheelEvent, SharedString, Window, canvas, div, point,
     prelude::*, px, quad, rgb, size, transparent_black,
 };
 
@@ -12,6 +13,11 @@ pub(super) struct ChartView {
     price_max: f64,
     interval: Option<Interval>,
     source: String,
+    view_offset: f32,
+    zoom: f32,
+    chart_bounds: Option<Bounds<Pixels>>,
+    last_drag_position: Option<(f32, f32)>,
+    dragging: bool,
 }
 
 impl ChartView {
@@ -27,6 +33,11 @@ impl ChartView {
             price_max,
             interval,
             source: meta.source,
+            view_offset: 0.0,
+            zoom: 1.0,
+            chart_bounds: None,
+            last_drag_position: None,
+            dragging: false,
         }
     }
 
@@ -39,18 +50,126 @@ impl ChartView {
         };
         SharedString::from(label)
     }
+
+    fn visible_len(&self) -> f32 {
+        if self.candles.is_empty() {
+            return 0.0;
+        }
+        let zoom = self.zoom.max(1.0).min(self.candles.len() as f32);
+        (self.candles.len() as f32 / zoom).max(1.0)
+    }
+
+    fn clamp_offset(&self, offset: f32, visible_count: usize) -> f32 {
+        if self.candles.is_empty() {
+            return 0.0;
+        }
+        let max_start = self.candles.len().saturating_sub(visible_count);
+        offset.clamp(0.0, max_start as f32)
+    }
+
+    fn visible_range(&self) -> (usize, usize) {
+        if self.candles.is_empty() {
+            return (0, 0);
+        }
+        let visible = self.visible_len().round().max(1.0) as usize;
+        let start = self.clamp_offset(self.view_offset, visible).round() as usize;
+        let end = (start + visible).min(self.candles.len());
+        (start, end)
+    }
 }
 
 impl Render for ChartView {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         let interval_label = Self::interval_label(self.interval);
-        let candle_count = self.candles.len();
-        let range_text =
-            SharedString::from(format!("{:.4} - {:.4}", self.price_min, self.price_max));
+        let (start, end) = self.visible_range();
+        let visible = if start < end {
+            &self.candles[start..end]
+        } else {
+            &self.candles[..]
+        };
+        let candle_count = visible.len();
+        let (price_min, price_max) = padded_bounds(visible);
+        self.price_min = price_min;
+        self.price_max = price_max;
+        let range_text = SharedString::from(format!("{:.4} - {:.4}", price_min, price_max));
 
-        let candles = self.candles.clone();
+        let candles = visible.to_vec();
         let price_min = self.price_min;
         let price_max = self.price_max;
+
+        let track_bounds =
+            _cx.processor(|this: &mut Self, bounds: Vec<Bounds<Pixels>>, _, _| {
+                if let Some(chart_bounds) = bounds.get(1) {
+                    this.chart_bounds = Some(*chart_bounds);
+                }
+            });
+
+        let handle_scroll = _cx.listener(|this: &mut Self, event: &ScrollWheelEvent, window, _| {
+            if this.candles.is_empty() {
+                return;
+            }
+            let delta = event.delta.pixel_delta(px(16.0));
+            let scroll_y = f32::from(delta.y);
+            if scroll_y.abs() < f32::EPSILON {
+                return;
+            }
+            let center = this.view_offset + this.visible_len() * 0.5;
+            let zoom_factor = if scroll_y < 0.0 { 1.1 } else { 0.9 };
+            this.zoom = (this.zoom * zoom_factor).clamp(1.0, this.candles.len() as f32);
+            let new_visible = this.visible_len();
+            let new_offset = center - new_visible * 0.5;
+            let visible_count = new_visible.round().max(1.0) as usize;
+            this.view_offset = this.clamp_offset(new_offset, visible_count);
+            window.refresh();
+        });
+
+        let handle_mouse_down =
+            _cx.listener(|this: &mut Self, event: &MouseDownEvent, window, _| {
+                if event.button == MouseButton::Left {
+                    this.dragging = true;
+                    this.last_drag_position =
+                        Some((f32::from(event.position.x), f32::from(event.position.y)));
+                    window.refresh();
+                }
+            });
+
+        let handle_mouse_up = _cx.listener(|this: &mut Self, _: &MouseUpEvent, window, _| {
+            this.dragging = false;
+            this.last_drag_position = None;
+            window.refresh();
+        });
+
+        let handle_mouse_move =
+            _cx.listener(|this: &mut Self, event: &MouseMoveEvent, window, _| {
+                if !this.dragging || this.candles.is_empty() {
+                    return;
+                }
+                if event.pressed_button != Some(MouseButton::Left) {
+                    this.dragging = false;
+                    this.last_drag_position = None;
+                    return;
+                }
+
+                if let Some((last_x, _)) = this.last_drag_position {
+                    let dx = f32::from(event.position.x) - last_x;
+                    let width = this
+                        .chart_bounds
+                        .map(|b| f32::from(b.size.width).max(1.0))
+                        .unwrap_or(1.0);
+                    let visible = this.visible_len();
+                    if visible > 0.0 {
+                        let candles_per_px = visible / width.max(1e-3);
+                        let new_offset =
+                            this.view_offset - dx * candles_per_px;
+                        let visible_count = visible.round().max(1.0) as usize;
+                        this.view_offset = this.clamp_offset(new_offset, visible_count);
+                    }
+                }
+
+                this.last_drag_position =
+                    Some((f32::from(event.position.x), f32::from(event.position.y)));
+                window.refresh();
+            });
 
         let chart = canvas(
             move |_, _, _| candles.clone(),
@@ -132,6 +251,16 @@ impl Render for ChartView {
         .flex_1()
         .w_full();
 
+        let chart_area = div()
+            .flex_1()
+            .flex()
+            .w_full()
+            .on_mouse_down(MouseButton::Left, handle_mouse_down)
+            .on_mouse_move(handle_mouse_move)
+            .on_mouse_up(MouseButton::Left, handle_mouse_up)
+            .on_scroll_wheel(handle_scroll)
+            .child(chart);
+
         div()
             .flex()
             .flex_col()
@@ -162,7 +291,8 @@ impl Render for ChartView {
                             .child(format!("range: {range_text}")),
                     ),
             )
-            .child(chart)
+            .on_children_prepainted(track_bounds)
+            .child(chart_area)
     }
 }
 

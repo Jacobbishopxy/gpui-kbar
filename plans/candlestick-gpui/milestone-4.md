@@ -12,7 +12,7 @@ What changed
 
 Next steps
 
-- [ ] Add interactive controls for interval/pan/zoom: track zoom/offset, hook drag/scroll handlers, and apply transforms in the render path.
+- [x] Add pan/zoom interaction: track zoom/offset, hook drag/scroll handlers, and apply transforms in the render path. (Interval selector still pending.)
 - [ ] Implement hover tooltips with hit-testing of candle bodies/wicks; render an overlay with candle data near the cursor.
 - [ ] Draw axes/labels (price/time) alongside existing gridlines to improve readability.
 - [ ] Surface load/empty-data errors in the UI (not just CLI bailouts); render an error view when loaders fail.
