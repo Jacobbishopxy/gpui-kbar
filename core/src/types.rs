@@ -48,6 +48,7 @@ impl Default for LoadOptions {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Interval {
+    Second(u32),
     Minute(u32),
     Hour(u32),
     Day(u32),
@@ -56,6 +57,7 @@ pub enum Interval {
 impl Interval {
     pub fn as_duration(&self) -> Duration {
         match *self {
+            Interval::Second(n) => Duration::seconds(n.into()),
             Interval::Minute(n) => Duration::minutes(n.into()),
             Interval::Hour(n) => Duration::hours(n.into()),
             Interval::Day(n) => Duration::days(n.into()),

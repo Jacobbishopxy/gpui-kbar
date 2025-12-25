@@ -1,18 +1,26 @@
 use core::Interval;
 use gpui::{
-    Bounds, Context, Div, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Render,
+    Bounds, Context, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Render,
     ScrollWheelEvent, SharedString, Window, div, prelude::*, px, rgb,
 };
 use time::macros::format_description;
 
 use super::{padded_bounds, ChartView};
-use super::super::{canvas::chart_canvas, header::chart_header};
+use super::super::{
+    canvas::chart_canvas,
+    header::{chart_footer, chart_header},
+};
 
 const INTERVAL_OPTIONS: &[(Option<Interval>, &str)] = &[
-    (None, "Raw"),
+    (None, "raw"),
+    (Some(Interval::Second(3)), "3s"),
+    (Some(Interval::Second(10)), "10s"),
+    (Some(Interval::Second(30)), "30s"),
     (Some(Interval::Minute(1)), "1m"),
     (Some(Interval::Minute(5)), "5m"),
+    (Some(Interval::Minute(10)), "10m"),
     (Some(Interval::Minute(15)), "15m"),
+    (Some(Interval::Minute(30)), "30m"),
     (Some(Interval::Hour(1)), "1h"),
     (Some(Interval::Day(1)), "1d"),
 ];
@@ -20,6 +28,7 @@ const INTERVAL_OPTIONS: &[(Option<Interval>, &str)] = &[
 impl Render for ChartView {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         let interval_label = ChartView::interval_label(self.interval);
+        let select_label = interval_label.clone();
         let (start, end) = self.visible_range();
         let visible = if start < end {
             &self.candles[start..end]
@@ -150,42 +159,74 @@ impl Render for ChartView {
             .child(mid_label.unwrap_or_else(|| "---".into()))
             .child(end_label.unwrap_or_else(|| "---".into()));
 
-        let interval_button =
-            |option: Option<Interval>, label: &str| -> Div {
-                let is_active = self.interval == option;
-                let handler =
-                    _cx.listener(move |this: &mut Self, _: &MouseDownEvent, window, _| {
-                        this.apply_interval(option);
-                        window.refresh();
-                    });
-                let label_text = SharedString::from(label.to_string());
-                let bg = if is_active { rgb(0x1f2937) } else { rgb(0x111827) };
-                let border = if is_active { rgb(0xf59e0b) } else { rgb(0x1f2937) };
+        let toggle_interval_select =
+            _cx.listener(|this: &mut Self, _: &MouseDownEvent, window, _| {
+                this.interval_select_open = !this.interval_select_open;
+                window.refresh();
+            });
 
-                div()
-                    .px_3()
-                    .py_1()
-                    .rounded_md()
-                    .border_1()
-                    .border_color(border)
-                    .bg(bg)
-                    .text_sm()
-                    .text_color(gpui::white())
-                    .on_mouse_down(MouseButton::Left, handler)
-                    .child(label_text)
-            };
-
-        let mut interval_row = div()
+        let interval_trigger = div()
             .flex()
+            .justify_between()
+            .items_center()
             .gap_2()
             .px_3()
             .py_2()
-            .bg(rgb(0x0f172a))
-            .border_b_1()
-            .border_color(rgb(0x1f2937));
-        for (option, label) in INTERVAL_OPTIONS {
-            interval_row = interval_row.child(interval_button(*option, label));
-        }
+            .w(px(160.))
+            .rounded_md()
+            .border_1()
+            .border_color(rgb(0x1f2937))
+            .bg(rgb(0x111827))
+            .text_sm()
+            .text_color(gpui::white())
+            .on_mouse_down(MouseButton::Left, toggle_interval_select)
+            .child(format!("interval: {select_label}"))
+            .child(if self.interval_select_open { "^" } else { "v" });
+
+        let interval_select = div().child(interval_trigger);
+
+        let interval_menu = if self.interval_select_open {
+            let mut menu = div()
+                .absolute()
+                .top(px(52.))
+                .right(px(12.))
+                .flex()
+                .flex_col()
+                .bg(rgb(0x0f172a))
+                .border_1()
+                .border_color(rgb(0x1f2937))
+                .rounded_md();
+
+            for (option, label) in INTERVAL_OPTIONS {
+                let is_active = self.interval == *option;
+                let handler =
+                    _cx.listener(move |this: &mut Self, _: &MouseDownEvent, window, _| {
+                        this.apply_interval(*option);
+                        window.refresh();
+                    });
+                let bg = if is_active { rgb(0x1f2937) } else { rgb(0x0f172a) };
+                let text = SharedString::from(label.to_string());
+
+                menu = menu.child(
+                    div()
+                        .px_3()
+                        .py_2()
+                        .w(px(160.))
+                        .bg(bg)
+                        .text_sm()
+                        .text_color(gpui::white())
+                        .on_mouse_down(MouseButton::Left, handler)
+                        .child(text),
+                );
+            }
+
+            Some(menu)
+        } else {
+            None
+        };
+
+        let header = chart_header(&self.source, interval_select);
+        let footer = chart_footer(interval_label, candle_count, range_text.clone());
 
         let chart_area = div()
             .flex()
@@ -197,20 +238,22 @@ impl Render for ChartView {
             .child(chart_row)
             .child(time_axis);
 
-        div()
+        let mut root = div()
             .flex()
             .flex_col()
             .w_full()
             .h_full()
+            .relative()
             .bg(rgb(0x0b1220))
             .text_color(gpui::white())
-            .child(chart_header(
-                &self.source,
-                interval_label,
-                candle_count,
-                range_text,
-            ))
-            .child(interval_row)
+            .child(header)
             .child(chart_area)
+            .child(footer);
+
+        if let Some(menu) = interval_menu {
+            root = root.child(menu);
+        }
+
+        root
     }
 }

@@ -17,6 +17,7 @@ pub(crate) struct ChartView {
     pub(super) dragging: bool,
     pub(super) hover_index: Option<usize>,
     pub(super) hover_position: Option<(f32, f32)>,
+    pub(super) interval_select_open: bool,
 }
 
 impl ChartView {
@@ -41,11 +42,13 @@ impl ChartView {
             dragging: false,
             hover_index: None,
             hover_position: None,
+            interval_select_open: false,
         }
     }
 
     pub(super) fn interval_label(interval: Option<Interval>) -> SharedString {
         let label = match interval {
+            Some(Interval::Second(n)) => format!("{n}s"),
             Some(Interval::Minute(n)) => format!("{n}m"),
             Some(Interval::Hour(n)) => format!("{n}h"),
             Some(Interval::Day(n)) => format!("{n}d"),
@@ -90,6 +93,7 @@ impl ChartView {
         self.zoom = 1.0;
         self.hover_index = None;
         self.hover_position = None;
+        self.interval_select_open = false;
     }
 }
 

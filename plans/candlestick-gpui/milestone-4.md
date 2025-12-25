@@ -9,6 +9,7 @@ What changed
 - [x] Kept lib exports stable for callers.
 - [x] Tests updated to use new module layout; `cargo test -p core` passes.
 - [x] UI/app now load via core loaders; UI renders a minimal candlestick view (optional one-time resample).
+- [x] Interval selector expanded to raw/3s/10s/30s/1m/5m/10m/15m/30m/1h/1d with dropdown placement in the header and stats moved to a footer.
 
 Next steps
 

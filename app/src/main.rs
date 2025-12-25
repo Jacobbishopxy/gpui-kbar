@@ -14,7 +14,7 @@ struct Args {
     #[arg(long, value_enum)]
     format: Option<InputFormat>,
 
-    /// Resample interval (e.g. 1m, 5m, 1h, 1d). If omitted, raw data is used.
+    /// Resample interval (e.g. 3s, 10s, 1m, 1h, 1d). If omitted, raw data is used.
     #[arg(long, value_parser = parse_interval)]
     interval: Option<Interval>,
 }
@@ -77,9 +77,10 @@ fn parse_interval(raw: &str) -> Result<Interval, String> {
         .map_err(|_| format!("invalid interval amount: {number}"))?;
 
     match unit {
+        "s" => Ok(Interval::Second(amount)),
         "m" => Ok(Interval::Minute(amount)),
         "h" => Ok(Interval::Hour(amount)),
         "d" => Ok(Interval::Day(amount)),
-        other => Err(format!("unsupported interval unit: {other} (use m/h/d)")),
+        other => Err(format!("unsupported interval unit: {other} (use s/m/h/d)")),
     }
 }
