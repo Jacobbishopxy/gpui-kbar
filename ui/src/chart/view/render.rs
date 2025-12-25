@@ -1,11 +1,21 @@
+use core::Interval;
 use gpui::{
-    Bounds, Context, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Render,
+    Bounds, Context, Div, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Render,
     ScrollWheelEvent, SharedString, Window, div, prelude::*, px, rgb,
 };
 use time::macros::format_description;
 
 use super::{padded_bounds, ChartView};
 use super::super::{canvas::chart_canvas, header::chart_header};
+
+const INTERVAL_OPTIONS: &[(Option<Interval>, &str)] = &[
+    (None, "Raw"),
+    (Some(Interval::Minute(1)), "1m"),
+    (Some(Interval::Minute(5)), "5m"),
+    (Some(Interval::Minute(15)), "15m"),
+    (Some(Interval::Hour(1)), "1h"),
+    (Some(Interval::Day(1)), "1d"),
+];
 
 impl Render for ChartView {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
@@ -140,6 +150,43 @@ impl Render for ChartView {
             .child(mid_label.unwrap_or_else(|| "---".into()))
             .child(end_label.unwrap_or_else(|| "---".into()));
 
+        let interval_button =
+            |option: Option<Interval>, label: &str| -> Div {
+                let is_active = self.interval == option;
+                let handler =
+                    _cx.listener(move |this: &mut Self, _: &MouseDownEvent, window, _| {
+                        this.apply_interval(option);
+                        window.refresh();
+                    });
+                let label_text = SharedString::from(label.to_string());
+                let bg = if is_active { rgb(0x1f2937) } else { rgb(0x111827) };
+                let border = if is_active { rgb(0xf59e0b) } else { rgb(0x1f2937) };
+
+                div()
+                    .px_3()
+                    .py_1()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(border)
+                    .bg(bg)
+                    .text_sm()
+                    .text_color(gpui::white())
+                    .on_mouse_down(MouseButton::Left, handler)
+                    .child(label_text)
+            };
+
+        let mut interval_row = div()
+            .flex()
+            .gap_2()
+            .px_3()
+            .py_2()
+            .bg(rgb(0x0f172a))
+            .border_b_1()
+            .border_color(rgb(0x1f2937));
+        for (option, label) in INTERVAL_OPTIONS {
+            interval_row = interval_row.child(interval_button(*option, label));
+        }
+
         let chart_area = div()
             .flex()
             .flex_col()
@@ -163,6 +210,7 @@ impl Render for ChartView {
                 candle_count,
                 range_text,
             ))
+            .child(interval_row)
             .child(chart_area)
     }
 }

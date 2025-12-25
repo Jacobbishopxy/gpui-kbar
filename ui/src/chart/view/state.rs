@@ -4,6 +4,7 @@ use gpui::{Bounds, Pixels, SharedString};
 use super::super::ChartMeta;
 
 pub(crate) struct ChartView {
+    pub(super) base_candles: Vec<Candle>,
     pub(super) candles: Vec<Candle>,
     pub(super) price_min: f64,
     pub(super) price_max: f64,
@@ -20,12 +21,14 @@ pub(crate) struct ChartView {
 
 impl ChartView {
     pub(crate) fn new(base_candles: Vec<Candle>, meta: ChartMeta) -> Self {
+        let base = base_candles;
         let (candles, interval) = match meta.initial_interval {
-            Some(i) => (resample(&base_candles, i), Some(i)),
-            None => (base_candles, None),
+            Some(i) => (resample(&base, i), Some(i)),
+            None => (base.clone(), None),
         };
         let (price_min, price_max) = padded_bounds(&candles);
         Self {
+            base_candles: base,
             candles,
             price_min,
             price_max,
@@ -75,6 +78,18 @@ impl ChartView {
         let start = self.clamp_offset(self.view_offset, visible).round() as usize;
         let end = (start + visible).min(self.candles.len());
         (start, end)
+    }
+
+    pub(super) fn apply_interval(&mut self, interval: Option<Interval>) {
+        self.interval = interval;
+        self.candles = match interval {
+            Some(i) => resample(&self.base_candles, i),
+            None => self.base_candles.clone(),
+        };
+        self.view_offset = 0.0;
+        self.zoom = 1.0;
+        self.hover_index = None;
+        self.hover_position = None;
     }
 }
 
