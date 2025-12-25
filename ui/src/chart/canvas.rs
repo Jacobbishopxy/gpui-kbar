@@ -30,8 +30,10 @@ pub(super) fn chart_canvas(
             }
 
             let range = (price_max - price_min).max(1e-9);
-            let candle_width = (width / candles.len() as f32).max(1.0);
-            let body_width = (candle_width * 0.6).max(1.0);
+            // Use the actual per-candle width so all candles fit within the viewport, even when
+            // there are more candles than pixels. Clamp to >0 to avoid division by zero.
+            let candle_width = (width / candles.len() as f32).max(f32::EPSILON);
+            let body_width = (candle_width * 0.6).max(f32::EPSILON);
 
             let price_to_y = |price: f64| -> f32 {
                 let normalized = ((price - price_min) / range).clamp(0.0, 1.0);
