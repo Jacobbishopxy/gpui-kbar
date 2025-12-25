@@ -2,10 +2,12 @@ use core::{Candle, Interval};
 use gpui::{App, Application, Bounds, WindowBounds, WindowOptions, prelude::*, px, size};
 
 mod canvas;
+mod error_view;
 mod header;
 mod view;
 
 use view::ChartView;
+use error_view::ErrorView;
 
 #[derive(Clone)]
 pub struct ChartMeta {
@@ -13,20 +15,36 @@ pub struct ChartMeta {
     pub initial_interval: Option<Interval>,
 }
 
-pub fn launch_chart(base_candles: Vec<Candle>, meta: ChartMeta) {
+pub fn launch_chart(candles: Result<Vec<Candle>, String>, meta: ChartMeta) {
     let view_meta = meta.clone();
-    let initial_base = base_candles.clone();
     Application::new().run(move |cx: &mut App| {
         let bounds = Bounds::centered(None, size(px(1200.), px(800.)), cx);
-        cx.open_window(
-            WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
-                focus: true,
-                ..Default::default()
-            },
-            move |_, cx| cx.new(|_| ChartView::new(initial_base.clone(), view_meta.clone())),
-        )
-        .expect("failed to open window");
+        match candles.clone() {
+            Ok(base) => {
+                let initial_base = base.clone();
+                cx.open_window(
+                    WindowOptions {
+                        window_bounds: Some(WindowBounds::Windowed(bounds)),
+                        focus: true,
+                        ..Default::default()
+                    },
+                    move |_, cx| cx.new(|_| ChartView::new(initial_base.clone(), view_meta.clone())),
+                )
+                .expect("failed to open window");
+            }
+            Err(msg) => {
+                let err_msg = msg.clone();
+                cx.open_window(
+                    WindowOptions {
+                        window_bounds: Some(WindowBounds::Windowed(bounds)),
+                        focus: true,
+                        ..Default::default()
+                    },
+                    move |_, cx| cx.new(|_| ErrorView::new(view_meta.source.clone(), err_msg.clone())),
+                )
+                .expect("failed to open window");
+            }
+        }
         cx.activate(true);
     });
 }

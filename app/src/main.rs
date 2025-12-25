@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, bail};
+use anyhow::Result;
 use clap::{Parser, ValueEnum};
 use core::{Interval, LoadOptions, load_csv, load_parquet};
 
@@ -27,27 +27,31 @@ enum InputFormat {
 
 fn main() -> Result<()> {
     let args = Args::parse();
-    let format = args
-        .format
-        .or_else(|| detect_format(&args.path))
-        .context("could not determine file format (use --format)")?;
+    let load_result: Result<Vec<_>, String> = (|| {
+        let format = args
+            .format
+            .or_else(|| detect_format(&args.path))
+            .ok_or_else(|| "could not determine file format (use --format)".to_string())?;
 
-    let candles = match format {
-        InputFormat::Csv => load_csv(&args.path, LoadOptions::default()),
-        InputFormat::Parquet => load_parquet(&args.path, LoadOptions::default()),
-    }
-    .with_context(|| format!("failed to load {}", args.path.display()))?;
+        let candles = match format {
+            InputFormat::Csv => load_csv(&args.path, LoadOptions::default()),
+            InputFormat::Parquet => load_parquet(&args.path, LoadOptions::default()),
+        }
+        .map_err(|e| format!("failed to load {}: {e}", args.path.display()))?;
 
-    if candles.is_empty() {
-        bail!("no candles loaded from {}", args.path.display());
-    }
+        if candles.is_empty() {
+            return Err(format!("no candles loaded from {}", args.path.display()));
+        }
+
+        Ok(candles)
+    })();
 
     let meta = ui::ChartMeta {
         source: args.path.display().to_string(),
         initial_interval: args.interval,
     };
 
-    ui::launch_chart(candles, meta);
+    ui::launch_chart(load_result, meta);
     Ok(())
 }
 
