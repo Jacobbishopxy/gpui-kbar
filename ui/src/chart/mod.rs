@@ -3,11 +3,12 @@ use gpui::{App, Application, Bounds, WindowBounds, WindowOptions, prelude::*, px
 
 mod canvas;
 mod error_view;
+mod footer;
 mod header;
 mod view;
 
-use view::ChartView;
 use error_view::ErrorView;
+use view::ChartView;
 
 #[derive(Clone)]
 pub struct ChartMeta {
@@ -28,7 +29,9 @@ pub fn launch_chart(candles: Result<Vec<Candle>, String>, meta: ChartMeta) {
                         focus: true,
                         ..Default::default()
                     },
-                    move |_, cx| cx.new(|_| ChartView::new(initial_base.clone(), view_meta.clone())),
+                    move |_, cx| {
+                        cx.new(|_| ChartView::new(initial_base.clone(), view_meta.clone()))
+                    },
                 )
                 .expect("failed to open window");
             }
@@ -40,7 +43,9 @@ pub fn launch_chart(candles: Result<Vec<Candle>, String>, meta: ChartMeta) {
                         focus: true,
                         ..Default::default()
                     },
-                    move |_, cx| cx.new(|_| ErrorView::new(view_meta.source.clone(), err_msg.clone())),
+                    move |_, cx| {
+                        cx.new(|_| ErrorView::new(view_meta.source.clone(), err_msg.clone()))
+                    },
                 )
                 .expect("failed to open window");
             }

@@ -100,3 +100,74 @@ pub(super) fn chart_canvas(
         },
     )
 }
+
+pub(super) fn volume_canvas(
+    candles: Vec<Candle>,
+    hover_local: Option<usize>,
+) -> Canvas<Vec<Candle>> {
+    canvas(
+        move |_, _, _| candles.clone(),
+        move |bounds, candles, window, _| {
+            window.paint_quad(quad(
+                bounds,
+                px(0.),
+                rgb(0x0b1220),
+                px(0.),
+                transparent_black(),
+                BorderStyle::default(),
+            ));
+
+            let width = f32::from(bounds.size.width);
+            let height = f32::from(bounds.size.height);
+            let ox = f32::from(bounds.origin.x);
+            let oy = f32::from(bounds.origin.y);
+            if candles.is_empty() || height <= 0.0 || width <= 0.0 {
+                return;
+            }
+
+            let max_vol = candles
+                .iter()
+                .map(|c| c.volume)
+                .fold(0.0_f64, f64::max)
+                .max(1e-9);
+
+            let candle_width = (width / candles.len() as f32).max(f32::EPSILON);
+            let bar_width = (candle_width * 0.7).max(f32::EPSILON);
+
+            for (idx, candle) in candles.iter().enumerate() {
+                let x = ox + idx as f32 * candle_width + candle_width * 0.5;
+                let normalized = (candle.volume / max_vol).clamp(0.0, 1.0);
+                let bar_h = (normalized as f32 * height).max(1.0);
+                let y = oy + height - bar_h;
+                let color = if candle.close >= candle.open {
+                    rgb(0x22c55e)
+                } else {
+                    rgb(0xef4444)
+                };
+
+                let bar_bounds = Bounds {
+                    origin: point(px(x - bar_width * 0.5), px(y)),
+                    size: size(px(bar_width), px(bar_h)),
+                };
+                window.paint_quad(quad(
+                    bar_bounds,
+                    px(1.),
+                    color,
+                    px(0.),
+                    color,
+                    BorderStyle::default(),
+                ));
+            }
+
+            if let Some(local_idx) = hover_local {
+                let x = ox + local_idx as f32 * candle_width + candle_width * 0.5;
+                let mut builder = PathBuilder::stroke(px(1.));
+                builder.move_to(point(px(x), px(oy)));
+                builder.line_to(point(px(x), px(oy + height)));
+                if let Ok(path) = builder.build() {
+                    window.paint_path(path, rgb(0xf59e0b));
+                }
+            }
+        },
+    )
+}

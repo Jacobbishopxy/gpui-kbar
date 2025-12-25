@@ -5,11 +5,12 @@ use gpui::{
 };
 use time::macros::format_description;
 
-use super::{padded_bounds, ChartView};
 use super::super::{
-    canvas::chart_canvas,
-    header::{chart_footer, chart_header},
+    canvas::{chart_canvas, volume_canvas},
+    footer::chart_footer,
+    header::chart_header,
 };
+use super::{ChartView, padded_bounds};
 
 const INTERVAL_OPTIONS: &[(Option<Interval>, &str)] = &[
     (None, "raw"),
@@ -49,17 +50,24 @@ impl Render for ChartView {
         ];
 
         let time_fmt = format_description!("[year]-[month]-[day] [hour]:[minute]");
-        let start_label = visible
-            .first()
-            .map(|c| c.timestamp.format(&time_fmt).unwrap_or_else(|_| c.timestamp.to_string()));
-        let mid_label = visible
-            .get(candle_count.saturating_sub(1) / 2)
-            .map(|c| c.timestamp.format(&time_fmt).unwrap_or_else(|_| c.timestamp.to_string()));
-        let end_label = visible
-            .last()
-            .map(|c| c.timestamp.format(&time_fmt).unwrap_or_else(|_| c.timestamp.to_string()));
+        let start_label = visible.first().map(|c| {
+            c.timestamp
+                .format(&time_fmt)
+                .unwrap_or_else(|_| c.timestamp.to_string())
+        });
+        let mid_label = visible.get(candle_count.saturating_sub(1) / 2).map(|c| {
+            c.timestamp
+                .format(&time_fmt)
+                .unwrap_or_else(|_| c.timestamp.to_string())
+        });
+        let end_label = visible.last().map(|c| {
+            c.timestamp
+                .format(&time_fmt)
+                .unwrap_or_else(|_| c.timestamp.to_string())
+        });
 
         let candles = visible.to_vec();
+        let volume_candles = candles.clone();
         let price_min = self.price_min;
         let price_max = self.price_max;
         let hover_local = self.hover_index.and_then(|idx| {
@@ -108,16 +116,13 @@ impl Render for ChartView {
             .w_full()
             .h_full();
 
-        let mut canvas_region = div()
+        let canvas_region = div()
             .flex_1()
             .w_full()
             .h_full()
             .relative()
             .on_children_prepainted(track_chart_bounds)
             .child(chart);
-        if let Some(tip) = tooltip {
-            canvas_region = canvas_region.child(tip);
-        }
 
         let price_axis = div()
             .w(px(82.))
@@ -204,7 +209,11 @@ impl Render for ChartView {
                         this.apply_interval(*option);
                         window.refresh();
                     });
-                let bg = if is_active { rgb(0x1f2937) } else { rgb(0x0f172a) };
+                let bg = if is_active {
+                    rgb(0x1f2937)
+                } else {
+                    rgb(0x0f172a)
+                };
                 let text = SharedString::from(label.to_string());
 
                 menu = menu.child(
@@ -234,8 +243,22 @@ impl Render for ChartView {
             .flex_1()
             .w_full()
             .h_full()
-            .min_h(px(360.))
+            .min_h(px(420.))
             .child(chart_row)
+            .child(
+                div()
+                    .flex()
+                    .w_full()
+                    .h(px(120.))
+                    .min_h(px(100.))
+                    .child(div().w(px(82.)).h_full().bg(rgb(0x0b1220)))
+                    .child(
+                        volume_canvas(volume_candles, hover_local)
+                            .flex_1()
+                            .w_full()
+                            .h_full(),
+                    ),
+            )
             .child(time_axis);
 
         let mut root = div()
@@ -249,6 +272,10 @@ impl Render for ChartView {
             .child(header)
             .child(chart_area)
             .child(footer);
+
+        if let Some(tip) = tooltip {
+            root = root.child(tip);
+        }
 
         if let Some(menu) = interval_menu {
             root = root.child(menu);
