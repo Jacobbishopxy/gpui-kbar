@@ -8,6 +8,7 @@ pub(super) fn chart_canvas(
     price_min: f64,
     price_max: f64,
     hover_local: Option<usize>,
+    hover_y: Option<f32>,
 ) -> Canvas<Vec<Candle>> {
     canvas(
         move |_, _, _| candles.clone(),
@@ -93,6 +94,16 @@ pub(super) fn chart_canvas(
                 let mut builder = PathBuilder::stroke(px(1.));
                 builder.move_to(point(px(x), px(oy)));
                 builder.line_to(point(px(x), px(oy + height)));
+                if let Ok(path) = builder.build() {
+                    window.paint_path(path, rgb(0xf59e0b));
+                }
+            }
+
+            if let Some(y) = hover_y {
+                let y = y.clamp(oy, oy + height);
+                let mut builder = PathBuilder::stroke(px(1.));
+                builder.move_to(point(px(ox), px(y)));
+                builder.line_to(point(px(ox + width), px(y)));
                 if let Ok(path) = builder.build() {
                     window.paint_path(path, rgb(0xf59e0b));
                 }

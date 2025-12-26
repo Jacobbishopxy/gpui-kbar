@@ -42,6 +42,7 @@ impl Render for ChartView {
         self.price_max = price_max;
         let range_text = SharedString::from(format!("{:.4} - {:.4}", price_min, price_max));
         let tooltip = self.tooltip_overlay(start, end);
+        let price_label = self.price_label_overlay();
 
         let price_labels = [
             format!("{price_max:.4}"),
@@ -77,6 +78,11 @@ impl Render for ChartView {
                 None
             }
         });
+        let hover_y = if hover_local.is_some() {
+            self.hover_position.map(|(_, y)| y)
+        } else {
+            None
+        };
 
         let track_chart_bounds =
             _cx.processor(|this: &mut Self, bounds: Vec<Bounds<Pixels>>, _, _| {
@@ -111,7 +117,7 @@ impl Render for ChartView {
                 this.handle_drag(event, window);
             });
 
-        let chart = chart_canvas(candles, price_min, price_max, hover_local)
+        let chart = chart_canvas(candles, price_min, price_max, hover_local, hover_y)
             .flex_1()
             .w_full()
             .h_full();
@@ -275,6 +281,10 @@ impl Render for ChartView {
 
         if let Some(tip) = tooltip {
             root = root.child(tip);
+        }
+
+        if let Some(price) = price_label {
+            root = root.child(price);
         }
 
         if let Some(menu) = interval_menu {

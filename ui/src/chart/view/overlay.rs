@@ -1,8 +1,50 @@
-use gpui::{Div, div, prelude::*, px, rgb};
+use gpui::{Div, div, prelude::*, px, rgba, rgb};
 
 use super::ChartView;
 
 impl ChartView {
+    pub(super) fn price_label_overlay(&self) -> Option<Div> {
+        let (_, (_, y), bounds) = (self.hover_index?, self.hover_position?, self.chart_bounds?);
+        let height = f32::from(bounds.size.height);
+        let width = f32::from(bounds.size.width);
+        if height <= 0.0 || width <= 0.0 {
+            return None;
+        }
+
+        let oy = f32::from(bounds.origin.y);
+        let ox = f32::from(bounds.origin.x);
+        let normalized = ((y - oy) / height).clamp(0.0, 1.0);
+        let price = self.price_max - (self.price_max - self.price_min) * normalized as f64;
+
+        // Position the label near the left edge of the chart area and clamp within bounds.
+        let label_h = 18.0;
+        let label_w = 72.0;
+        let mut top = y - label_h * 0.5;
+        top = top.clamp(oy, oy + height - label_h);
+        let mut left = ox + 6.0;
+        left = left.clamp(ox, ox + width - label_w);
+
+        Some(
+            div()
+                .absolute()
+                .left(px(left.max(0.0)))
+                .top(px(top))
+                .w(px(label_w))
+                .h(px(label_h))
+                .px_1()
+                .bg(rgba(0x1f293780))
+                .border_1()
+                .border_color(rgba(0x37415180))
+                .rounded_sm()
+                .flex()
+                .items_center()
+                .justify_end()
+                .text_xs()
+                .text_color(gpui::white())
+                .child(format!("{price:.4}")),
+        )
+    }
+
     pub(super) fn tooltip_overlay(&self, start: usize, end: usize) -> Option<Div> {
         let (idx, (mx, my), bounds) = (self.hover_index?, self.hover_position?, self.chart_bounds?);
         let candle = self.candles.get(idx)?;
