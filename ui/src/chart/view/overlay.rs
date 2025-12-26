@@ -16,23 +16,23 @@ impl ChartView {
         let normalized = ((y - oy) / height).clamp(0.0, 1.0);
         let price = self.price_max - (self.price_max - self.price_min) * normalized as f64;
 
-        // Position the label near the left edge of the chart area and clamp within bounds.
+        // Position the label within the y-axis column (match its width).
+        let axis_width = 82.0;
         let label_h = 18.0;
-        let label_w = 72.0;
+        let label_w = axis_width;
         let mut top = y - label_h * 0.5;
         top = top.clamp(oy, oy + height - label_h);
-        let mut left = ox + 6.0;
-        left = left.clamp(ox, ox + width - label_w);
+        let left = ox - axis_width;
 
         Some(
             div()
                 .absolute()
-                .left(px(left.max(0.0)))
+                .left(px(left))
                 .top(px(top))
                 .w(px(label_w))
                 .h(px(label_h))
                 .px_1()
-                .bg(rgba(0x1f293780))
+                .bg(rgba(0x1f293780)) // 50% transparent
                 .border_1()
                 .border_color(rgba(0x37415180))
                 .rounded_sm()

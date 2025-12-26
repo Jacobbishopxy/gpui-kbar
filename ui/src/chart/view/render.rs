@@ -1,7 +1,9 @@
+use std::path::Path;
+
 use core::Interval;
 use gpui::{
-    Bounds, Context, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Render,
-    ScrollWheelEvent, SharedString, Window, div, prelude::*, px, rgb,
+    Bounds, Context, Div, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels,
+    Render, ScrollWheelEvent, SharedString, Window, div, prelude::*, px, rgb, rgba,
 };
 use time::macros::format_description;
 
@@ -25,6 +27,57 @@ const INTERVAL_OPTIONS: &[(Option<Interval>, &str)] = &[
     (Some(Interval::Hour(1)), "1h"),
     (Some(Interval::Day(1)), "1d"),
 ];
+const SIDEBAR_WIDTH: f32 = 320.0;
+const TOOLBAR_WIDTH: f32 = 56.0;
+
+fn toolbar_button(label: impl Into<SharedString>, active: bool) -> Div {
+    let label = label.into();
+    let bg = if active { rgb(0x111827) } else { rgb(0x0f172a) };
+    div()
+        .w(px(36.))
+        .h(px(36.))
+        .rounded_md()
+        .bg(bg)
+        .border_1()
+        .border_color(rgb(0x1f2937))
+        .flex()
+        .items_center()
+        .justify_center()
+        .text_xs()
+        .text_color(rgb(0xe5e7eb))
+        .child(label)
+}
+
+fn header_chip(label: impl Into<SharedString>) -> Div {
+    let label = label.into();
+    div()
+        .px_3()
+        .py_2()
+        .rounded_md()
+        .bg(rgb(0x111827))
+        .border_1()
+        .border_color(rgb(0x1f2937))
+        .text_sm()
+        .text_color(rgb(0xe5e7eb))
+        .child(label)
+}
+
+fn stat_row(label: impl Into<SharedString>, value: impl Into<String>) -> Div {
+    let label = label.into();
+    div()
+        .flex()
+        .items_center()
+        .justify_between()
+        .text_xs()
+        .text_color(rgb(0x9ca3af))
+        .child(label)
+        .child(
+            div()
+                .text_sm()
+                .text_color(rgb(0xe5e7eb))
+                .child(value.into()),
+        )
+}
 
 impl Render for ChartView {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
@@ -42,8 +95,6 @@ impl Render for ChartView {
         self.price_max = price_max;
         let range_text = SharedString::from(format!("{:.4} - {:.4}", price_min, price_max));
         let tooltip = self.tooltip_overlay(start, end);
-        let price_label = self.price_label_overlay();
-
         let price_labels = [
             format!("{price_max:.4}"),
             format!("{:.4}", (price_min + price_max) * 0.5),
@@ -83,6 +134,33 @@ impl Render for ChartView {
         } else {
             None
         };
+        let last_close = self.candles.last().map(|c| c.close);
+        let prev_close = self.candles.iter().rev().nth(1).map(|c| c.close);
+        let (change_display, change_color) = match (last_close, prev_close) {
+            (Some(latest), Some(prev)) if prev.abs() > f64::EPSILON => {
+                let diff = latest - prev;
+                let pct = diff / prev * 100.0;
+                let sign = if diff >= 0.0 { "+" } else { "-" };
+                (
+                    format!("{sign}{:.2} ({sign}{:.2}%)", diff.abs(), pct.abs()),
+                    if diff >= 0.0 {
+                        rgb(0x22c55e)
+                    } else {
+                        rgb(0xef4444)
+                    },
+                )
+            }
+            _ => ("--".to_string(), rgb(0x9ca3af)),
+        };
+        let symbol_label = Path::new(&self.source)
+            .file_name()
+            .and_then(|s| s.to_str())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| self.source.as_str())
+            .to_string();
+        let price_display = last_close
+            .map(|v| format!("{v:.2}"))
+            .unwrap_or_else(|| "--".to_string());
 
         let track_chart_bounds =
             _cx.processor(|this: &mut Self, bounds: Vec<Bounds<Pixels>>, _, _| {
@@ -138,11 +216,58 @@ impl Render for ChartView {
             .justify_between()
             .items_end()
             .px_2()
+            .bg(rgb(0x0f172a))
+            .border_r_1()
+            .border_color(rgb(0x1f2937))
             .text_xs()
             .text_color(rgb(0x9ca3af))
+            .relative()
             .child(price_labels[0].clone())
             .child(price_labels[1].clone())
             .child(price_labels[2].clone());
+
+        let hover_price_label =
+            if let (Some((_, y)), Some(bounds)) = (self.hover_position, self.chart_bounds) {
+                let height = f32::from(bounds.size.height);
+                if height <= 0.0 {
+                    None
+                } else {
+                    let oy = f32::from(bounds.origin.y);
+                    let frac = ((y - oy) / height).clamp(0.0, 1.0);
+                    let price = self.price_max - (self.price_max - self.price_min) * frac as f64;
+                    let label_h = 18.0;
+                    let mut top = frac * height - label_h * 0.5;
+                    top = top.clamp(0.0, height - label_h);
+
+                    Some(
+                        div()
+                            .absolute()
+                            .left(px(0.))
+                            .top(px(top))
+                            .w(px(82.))
+                            .h(px(label_h))
+                            .px_1()
+                            .bg(rgba(0x1f293780))
+                            .border_1()
+                            .border_color(rgba(0x37415180))
+                            .rounded_sm()
+                            .flex()
+                            .items_center()
+                            .justify_end()
+                            .text_xs()
+                            .text_color(gpui::white())
+                            .child(format!("{price:.4}")),
+                    )
+                }
+            } else {
+                None
+            };
+
+        let price_axis = if let Some(label) = hover_price_label {
+            price_axis.child(label)
+        } else {
+            price_axis
+        };
 
         let chart_row = div()
             .flex_1()
@@ -166,6 +291,8 @@ impl Render for ChartView {
             .text_xs()
             .text_color(rgb(0x9ca3af))
             .bg(rgb(0x0f172a))
+            .border_t_1()
+            .border_color(rgb(0x1f2937))
             .child(start_label.unwrap_or_else(|| "---".into()))
             .child(mid_label.unwrap_or_else(|| "---".into()))
             .child(end_label.unwrap_or_else(|| "---".into()));
@@ -178,12 +305,11 @@ impl Render for ChartView {
 
         let interval_trigger = div()
             .flex()
-            .justify_between()
             .items_center()
             .gap_2()
             .px_3()
             .py_2()
-            .w(px(160.))
+            .w(px(128.))
             .rounded_md()
             .border_1()
             .border_color(rgb(0x1f2937))
@@ -191,7 +317,7 @@ impl Render for ChartView {
             .text_sm()
             .text_color(gpui::white())
             .on_mouse_down(MouseButton::Left, toggle_interval_select)
-            .child(format!("interval: {select_label}"))
+            .child(select_label.clone())
             .child(if self.interval_select_open { "^" } else { "v" });
 
         let interval_select = div().child(interval_trigger);
@@ -199,8 +325,8 @@ impl Render for ChartView {
         let interval_menu = if self.interval_select_open {
             let mut menu = div()
                 .absolute()
-                .top(px(52.))
-                .right(px(12.))
+                .bottom(px(96.))
+                .left(px(24.))
                 .flex()
                 .flex_col()
                 .bg(rgb(0x0f172a))
@@ -240,8 +366,82 @@ impl Render for ChartView {
             None
         };
 
-        let header = chart_header(&self.source, interval_select);
-        let footer = chart_footer(interval_label, candle_count, range_text.clone());
+        let header_left = div()
+            .flex()
+            .items_center()
+            .gap_3()
+            .child(
+                div()
+                    .px_3()
+                    .py_2()
+                    .rounded_md()
+                    .bg(rgb(0x1f2937))
+                    .text_sm()
+                    .text_color(gpui::white())
+                    .child("GPUI"),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .child(
+                        div()
+                            .text_lg()
+                            .text_color(gpui::white())
+                            .child(symbol_label.clone()),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(rgb(0x9ca3af))
+                            .child(self.source.clone()),
+                    ),
+            )
+            .child(header_chip("Indicators"))
+            .child(header_chip("Compare"))
+            .child(header_chip("Alerts"))
+            .child(header_chip("Replay"));
+
+        let header_right = div()
+            .flex()
+            .items_center()
+            .gap_2()
+            .child(header_chip("Log"))
+            .child(header_chip("Auto"))
+            .child(
+                div()
+                    .px_3()
+                    .py_2()
+                    .rounded_md()
+                    .bg(rgb(0x2563eb))
+                    .text_sm()
+                    .text_color(gpui::white())
+                    .child("Publish"),
+            )
+            .child(
+                div()
+                    .w(px(32.))
+                    .h(px(32.))
+                    .rounded_full()
+                    .bg(rgb(0x1f2937))
+                    .border_1()
+                    .border_color(rgb(0x1f2937))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_sm()
+                    .text_color(rgb(0xe5e7eb))
+                    .child("U"),
+            );
+
+        let header = chart_header(header_left, header_right);
+        let footer = chart_footer(
+            interval_select,
+            interval_label,
+            candle_count,
+            range_text.clone(),
+        );
 
         let chart_area = div()
             .flex()
@@ -250,6 +450,11 @@ impl Render for ChartView {
             .w_full()
             .h_full()
             .min_h(px(420.))
+            .bg(rgb(0x0b1220))
+            .border_1()
+            .border_color(rgb(0x1f2937))
+            .rounded_md()
+            .overflow_hidden()
             .child(chart_row)
             .child(
                 div()
@@ -257,7 +462,14 @@ impl Render for ChartView {
                     .w_full()
                     .h(px(120.))
                     .min_h(px(100.))
-                    .child(div().w(px(82.)).h_full().bg(rgb(0x0b1220)))
+                    .child(
+                        div()
+                            .w(px(82.))
+                            .h_full()
+                            .bg(rgb(0x0f172a))
+                            .border_r_1()
+                            .border_color(rgb(0x1f2937)),
+                    )
                     .child(
                         volume_canvas(volume_candles, hover_local)
                             .flex_1()
@@ -266,6 +478,205 @@ impl Render for ChartView {
                     ),
             )
             .child(time_axis);
+
+        let toolbar_items = [
+            "Cursor", "Trend", "Fib", "Brush", "Text", "Measure", "Zoom", "Cross",
+        ];
+        let mut left_toolbar = div()
+            .w(px(TOOLBAR_WIDTH))
+            .bg(rgb(0x0f172a))
+            .border_r_1()
+            .border_color(rgb(0x1f2937))
+            .py_3()
+            .flex()
+            .flex_col()
+            .items_center()
+            .gap_2();
+        for (idx, item) in toolbar_items.iter().enumerate() {
+            left_toolbar = left_toolbar.child(toolbar_button(*item, idx == 0));
+        }
+
+        let watchlist_items = [
+            ("AAPL", "273.81", "+0.53%"),
+            ("TSLA", "485.40", "-0.03%"),
+            ("NFLX", "93.64", "+0.15%"),
+            ("USOIL", "58.38", "-0.02%"),
+        ];
+        let mut watchlist_list = div().flex().flex_col().gap_2();
+        for (idx, (sym, price, change)) in watchlist_items.iter().enumerate() {
+            let active = idx == 0;
+            let bg = if active { rgb(0x111827) } else { rgb(0x0f172a) };
+            let change_color = if change.starts_with('-') {
+                rgb(0xef4444)
+            } else {
+                rgb(0x22c55e)
+            };
+            watchlist_list = watchlist_list.child(
+                div()
+                    .px_3()
+                    .py_2()
+                    .rounded_md()
+                    .bg(bg)
+                    .border_1()
+                    .border_color(rgb(0x1f2937))
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(div().text_sm().text_color(gpui::white()).child(*sym))
+                            .child(
+                                div()
+                                    .px_2()
+                                    .py_1()
+                                    .rounded_sm()
+                                    .bg(rgb(0x1f2937))
+                                    .text_xs()
+                                    .text_color(rgb(0x9ca3af))
+                                    .child("Stock"),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(div().text_sm().child(*price))
+                            .child(div().text_xs().text_color(change_color).child(*change)),
+                    ),
+            );
+        }
+
+        let watchlist_panel = div()
+            .bg(rgb(0x0b1220))
+            .border_1()
+            .border_color(rgb(0x1f2937))
+            .rounded_md()
+            .p_3()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(div().text_sm().text_color(gpui::white()).child("Watchlist"))
+                    .child(
+                        div()
+                            .px_2()
+                            .py_1()
+                            .rounded_md()
+                            .bg(rgb(0x111827))
+                            .text_xs()
+                            .text_color(rgb(0x9ca3af))
+                            .child("+ Add"),
+                    ),
+            )
+            .child(watchlist_list);
+
+        let instrument_card = div()
+            .bg(rgb(0x0b1220))
+            .border_1()
+            .border_color(rgb(0x1f2937))
+            .rounded_md()
+            .p_3()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(rgb(0x9ca3af))
+                    .child("Instrument"),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_3()
+                    .child(
+                        div()
+                            .text_2xl()
+                            .text_color(gpui::white())
+                            .child(price_display),
+                    )
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(change_color)
+                            .child(change_display),
+                    ),
+            )
+            .child(stat_row("Symbol", symbol_label.clone()))
+            .child(stat_row("Interval", select_label.to_string()))
+            .child(stat_row("Candles", candle_count.to_string()))
+            .child(stat_row("Range", range_text.to_string()));
+
+        let trading_stub = div()
+            .bg(rgb(0x0b1220))
+            .border_1()
+            .border_color(rgb(0x1f2937))
+            .rounded_md()
+            .p_3()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(gpui::white())
+                    .child("Trading panel"),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(rgb(0x9ca3af))
+                    .child("Order ticket and positions will appear here."),
+            )
+            .child(
+                div()
+                    .px_3()
+                    .py_2()
+                    .rounded_md()
+                    .bg(rgb(0x2563eb))
+                    .text_sm()
+                    .text_color(gpui::white())
+                    .child("Open panel"),
+            );
+
+        let sidebar = div()
+            .w(px(SIDEBAR_WIDTH))
+            .bg(rgb(0x0b1220))
+            .border_l_1()
+            .border_color(rgb(0x1f2937))
+            .p_3()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .child(watchlist_panel)
+            .child(instrument_card)
+            .child(trading_stub);
+
+        let main_column = div()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .gap_3()
+            .p_3()
+            .child(chart_area);
+
+        let body = div()
+            .flex()
+            .flex_1()
+            .w_full()
+            .min_h(px(560.))
+            .child(left_toolbar)
+            .child(main_column)
+            .child(sidebar);
 
         let mut root = div()
             .flex()
@@ -276,15 +687,11 @@ impl Render for ChartView {
             .bg(rgb(0x0b1220))
             .text_color(gpui::white())
             .child(header)
-            .child(chart_area)
+            .child(body)
             .child(footer);
 
         if let Some(tip) = tooltip {
             root = root.child(tip);
-        }
-
-        if let Some(price) = price_label {
-            root = root.child(price);
         }
 
         if let Some(menu) = interval_menu {
