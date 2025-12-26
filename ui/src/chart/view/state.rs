@@ -3,7 +3,7 @@ use gpui::{Bounds, Pixels, SharedString};
 
 use super::super::ChartMeta;
 
-pub(crate) struct ChartView {
+pub struct ChartView {
     pub(super) base_candles: Vec<Candle>,
     pub(super) candles: Vec<Candle>,
     pub(super) price_min: f64,
@@ -95,9 +95,16 @@ impl ChartView {
         self.hover_position = None;
         self.interval_select_open = false;
     }
+
+    pub(crate) fn replace_data(&mut self, base: Vec<Candle>, source: String) {
+        self.base_candles = base;
+        let interval = self.interval;
+        self.apply_interval(interval);
+        self.source = source;
+    }
 }
 
-pub(crate) fn padded_bounds(candles: &[Candle]) -> (f64, f64) {
+pub fn padded_bounds(candles: &[Candle]) -> (f64, f64) {
     let (min, mut max) = bounds(candles).unwrap_or((0.0, 1.0));
     if min == max {
         max = min + 1.0;

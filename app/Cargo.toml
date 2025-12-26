@@ -10,3 +10,7 @@ gpui.workspace = true
 clap.workspace = true
 anyhow.workspace = true
 time.workspace = true
+
+[[bin]]
+name = "app-runtime"
+path = "src/runtime.rs"

@@ -21,10 +21,10 @@ Plan
 
 Status
 
-- [ ] Runtime file picker sidebar flow implemented.
-- [ ] TCP connection placeholder exposed in the picker (non-functional).
+- [x] Runtime file picker sidebar flow implemented.
+- [x] TCP connection placeholder exposed in the picker (non-functional).
 - [x] Volume subplot renders under the main chart.
-- [ ] Horizontal cursor line and y-axis price label rendered.
+- [x] Horizontal cursor line and y-axis price label rendered.
 - [x] Tooltip layering fixed relative to interval menu.
 
 Notes

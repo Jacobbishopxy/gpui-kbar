@@ -8,7 +8,8 @@ mod header;
 mod view;
 
 use error_view::ErrorView;
-use view::ChartView;
+
+pub use view::ChartView;
 
 #[derive(Clone)]
 pub struct ChartMeta {

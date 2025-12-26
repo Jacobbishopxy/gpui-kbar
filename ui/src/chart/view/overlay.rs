@@ -1,4 +1,4 @@
-use gpui::{Div, div, prelude::*, px, rgba, rgb};
+use gpui::{Div, div, prelude::*, px, rgb, rgba};
 
 use super::ChartView;
 

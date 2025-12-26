@@ -1,8 +1,11 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use anyhow::Result;
-use clap::{Parser, ValueEnum};
+use clap::Parser;
 use core::{Interval, LoadOptions, load_csv, load_parquet};
+
+mod input;
+use input::{InputFormat, detect_format};
 
 #[derive(Parser, Debug)]
 #[command(name = "gpui-kbar")]
@@ -17,12 +20,6 @@ struct Args {
     /// Resample interval (e.g. 3s, 10s, 1m, 1h, 1d). If omitted, raw data is used.
     #[arg(long, value_parser = parse_interval)]
     interval: Option<Interval>,
-}
-
-#[derive(Copy, Clone, Debug, ValueEnum)]
-enum InputFormat {
-    Csv,
-    Parquet,
 }
 
 fn main() -> Result<()> {
@@ -53,15 +50,6 @@ fn main() -> Result<()> {
 
     ui::launch_chart(load_result, meta);
     Ok(())
-}
-
-fn detect_format(path: &Path) -> Option<InputFormat> {
-    let ext = path.extension()?.to_string_lossy().to_ascii_lowercase();
-    match ext.as_str() {
-        "csv" => Some(InputFormat::Csv),
-        "parquet" | "parq" => Some(InputFormat::Parquet),
-        _ => None,
-    }
 }
 
 fn parse_interval(raw: &str) -> Result<Interval, String> {
