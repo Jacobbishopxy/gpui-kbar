@@ -27,4 +27,5 @@ Status
 - [x] Layout shell sketched: header, chart/volume stack, left drawing toolbar stub, right watchlist/instrument/trading stubs, footer interval control.
 - [x] Price axis restyled and hover price label anchored inside the y-axis column (consistent across price/volume).
 - [x] Symbol search rebuilt as a centered TradingView-style popover with filters, scrollable results, and compact sizing.
+- [x] Started UI refactor: extracted symbol search overlay + shared widgets/context modules; added sections/overlays scaffolding to slim render.rs.
 - [ ] Wire watchlist/symbol switching + data reloads; implement overlays/drawings/interactions polish; snapshot tests/perf passes.
