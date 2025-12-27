@@ -8,3 +8,6 @@ mod widgets;
 mod state;
 
 pub use state::{ChartView, padded_bounds};
+pub const SIDEBAR_WIDTH: f32 = 320.0;
+pub const TOOLBAR_WIDTH: f32 = 56.0;
+pub const OVERLAY_GAP: f32 = 8.0;

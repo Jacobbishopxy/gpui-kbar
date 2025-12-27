@@ -28,4 +28,5 @@ Status
 - [x] Price axis restyled and hover price label anchored inside the y-axis column (consistent across price/volume).
 - [x] Symbol search rebuilt as a centered TradingView-style popover with filters, scrollable results, and compact sizing.
 - [x] Started UI refactor: extracted symbol search overlay + shared widgets/context modules; added sections/overlays scaffolding to slim render.rs.
+- [x] Further refactor: moved header/sidebar layouts and interval menu into dedicated modules to keep render.rs readable.
 - [ ] Wire watchlist/symbol switching + data reloads; implement overlays/drawings/interactions polish; snapshot tests/perf passes.

@@ -14,8 +14,12 @@ use super::super::{
 };
 use super::context::format_price_range;
 use super::overlays::symbol_search::symbol_search_overlay;
+use super::sections::header::header_controls;
+use super::sections::sidebar::sidebar;
 use super::widgets::{header_chip, stat_row, toolbar_button};
-use super::{ChartView, padded_bounds};
+use super::{
+    ChartView, OVERLAY_GAP, SIDEBAR_WIDTH, TOOLBAR_WIDTH, padded_bounds,
+};
 
 const INTERVAL_OPTIONS: &[(Option<Interval>, &str)] = &[
     (None, "raw"),
@@ -30,10 +34,6 @@ const INTERVAL_OPTIONS: &[(Option<Interval>, &str)] = &[
     (Some(Interval::Hour(1)), "1h"),
     (Some(Interval::Day(1)), "1d"),
 ];
-const SIDEBAR_WIDTH: f32 = 320.0;
-const TOOLBAR_WIDTH: f32 = 56.0;
-const OVERLAY_GAP: f32 = 8.0;
-
 impl Render for ChartView {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         let interval_label = ChartView::interval_label(self.interval);
@@ -300,71 +300,10 @@ impl Render for ChartView {
 
         let search_overlay = symbol_search_overlay(self, _cx);
 
-        let track_header_controls =
-            _cx.processor(|this: &mut Self, bounds: Vec<Bounds<Pixels>>, _, _| {
-                this.interval_trigger_bounds = bounds.get(1).copied();
-            });
-
-        let header_controls = div()
-            .relative()
-            .flex()
-            .items_center()
-            .gap_2()
-            .child(search_input)
-            .child(interval_trigger)
-            .on_children_prepainted(track_header_controls);
+        let (header_controls, search_overlay) = header_controls(self, _cx, interval_trigger);
 
         let interval_menu = if self.interval_select_open {
-            let (menu_left, menu_top, menu_width) =
-                if let Some(bounds) = self.interval_trigger_bounds {
-                    (
-                        f32::from(bounds.origin.x),
-                        f32::from(bounds.origin.y + bounds.size.height) + OVERLAY_GAP,
-                        f32::from(bounds.size.width),
-                    )
-                } else {
-                    (0.0, 148.0, 128.0)
-                };
-
-            let mut menu = div()
-                .absolute()
-                .left(px(menu_left))
-                .top(px(menu_top))
-                .flex()
-                .flex_col()
-                .bg(rgb(0x0f172a))
-                .border_1()
-                .border_color(rgb(0x1f2937))
-                .rounded_md();
-
-            for (option, label) in INTERVAL_OPTIONS {
-                let is_active = self.interval == *option;
-                let handler =
-                    _cx.listener(move |this: &mut Self, _: &MouseDownEvent, window, _| {
-                        this.apply_interval(*option);
-                        window.refresh();
-                    });
-                let bg = if is_active {
-                    rgb(0x1f2937)
-                } else {
-                    rgb(0x0f172a)
-                };
-                let text = SharedString::from(label.to_string());
-
-                menu = menu.child(
-                    div()
-                        .px_3()
-                        .py_2()
-                        .w(px(menu_width))
-                        .bg(bg)
-                        .text_sm()
-                        .text_color(gpui::white())
-                        .on_mouse_down(MouseButton::Left, handler)
-                        .child(text),
-                );
-            }
-
-            Some(menu)
+            super::overlays::interval_menu::interval_menu(self, _cx, INTERVAL_OPTIONS)
         } else {
             None
         };
@@ -619,18 +558,7 @@ impl Render for ChartView {
                     .child("Open panel"),
             );
 
-        let sidebar = div()
-            .w(px(SIDEBAR_WIDTH))
-            .bg(rgb(0x0b1220))
-            .border_l_1()
-            .border_color(rgb(0x1f2937))
-            .p_3()
-            .flex()
-            .flex_col()
-            .gap_3()
-            .child(watchlist_panel)
-            .child(instrument_card)
-            .child(trading_stub);
+        let sidebar = sidebar(watchlist_panel, instrument_card, trading_stub);
 
         let main_column = div()
             .flex()
