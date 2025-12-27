@@ -13,11 +13,14 @@ pub struct ChartView {
     pub(super) view_offset: f32,
     pub(super) zoom: f32,
     pub(super) chart_bounds: Option<Bounds<Pixels>>,
+    pub(super) interval_trigger_bounds: Option<Bounds<Pixels>>,
     pub(super) last_drag_position: Option<(f32, f32)>,
     pub(super) dragging: bool,
     pub(super) hover_index: Option<usize>,
     pub(super) hover_position: Option<(f32, f32)>,
     pub(super) interval_select_open: bool,
+    pub(super) symbol_search_open: bool,
+    pub(super) active_range_index: usize,
 }
 
 impl ChartView {
@@ -38,11 +41,14 @@ impl ChartView {
             view_offset: 0.0,
             zoom: 1.0,
             chart_bounds: None,
+            interval_trigger_bounds: None,
             last_drag_position: None,
             dragging: false,
             hover_index: None,
             hover_position: None,
             interval_select_open: false,
+            symbol_search_open: false,
+            active_range_index: 0,
         }
     }
 
@@ -94,6 +100,7 @@ impl ChartView {
         self.hover_index = None;
         self.hover_position = None;
         self.interval_select_open = false;
+        self.symbol_search_open = false;
     }
 
     pub(crate) fn replace_data(&mut self, base: Vec<Candle>, source: String) {

@@ -29,6 +29,7 @@ const INTERVAL_OPTIONS: &[(Option<Interval>, &str)] = &[
 ];
 const SIDEBAR_WIDTH: f32 = 320.0;
 const TOOLBAR_WIDTH: f32 = 56.0;
+const OVERLAY_GAP: f32 = 8.0;
 
 fn toolbar_button(label: impl Into<SharedString>, active: bool) -> Div {
     let label = label.into();
@@ -300,6 +301,7 @@ impl Render for ChartView {
         let toggle_interval_select =
             _cx.listener(|this: &mut Self, _: &MouseDownEvent, window, _| {
                 this.interval_select_open = !this.interval_select_open;
+                this.symbol_search_open = false;
                 window.refresh();
             });
 
@@ -317,16 +319,352 @@ impl Render for ChartView {
             .text_sm()
             .text_color(gpui::white())
             .on_mouse_down(MouseButton::Left, toggle_interval_select)
-            .child(select_label.clone())
-            .child(if self.interval_select_open { "^" } else { "v" });
+            .child(select_label.clone());
 
-        let interval_select = div().child(interval_trigger);
+        let toggle_symbol_search =
+            _cx.listener(|this: &mut Self, _: &MouseDownEvent, window, _| {
+                this.symbol_search_open = !this.symbol_search_open;
+                this.interval_select_open = false;
+                window.refresh();
+            });
+
+        let search_input = div()
+            .flex()
+            .items_center()
+            .gap_2()
+            .px_3()
+            .py_2()
+            .w(px(220.))
+            .rounded_md()
+            .border_1()
+            .border_color(rgb(0x1f2937))
+            .bg(rgb(0x111827))
+            .text_sm()
+            .text_color(rgb(0x9ca3af))
+            .on_mouse_down(MouseButton::Left, toggle_symbol_search)
+            .child(div().text_color(gpui::white()).child("Search symbols"));
+
+        let search_filters = [
+            "All", "Stocks", "Funds", "Futures", "Forex", "Crypto", "Indices", "Bonds", "Economy",
+            "Options",
+        ];
+        let search_results = [
+            ("100", "NDQ", "US 100 Index", "index cfd", "TVC"),
+            ("ETF", "NDQ", "BetaShares NASDAQ 100 ETF", "fund etf", "ASX"),
+            (
+                "ETF",
+                "NDQ",
+                "Invesco QQQ Trust Series I",
+                "fund etf",
+                "TRADEGATE",
+            ),
+            (
+                "ETF",
+                "NDQ",
+                "Invesco QQQ Trust Series I",
+                "fund etf",
+                "BER",
+            ),
+            (
+                "ETF",
+                "NDQ",
+                "Invesco QQQ Trust Series I",
+                "fund etf",
+                "HAM",
+            ),
+            (
+                "100",
+                "NDQM",
+                "NASDAQ 100 Index (NDX)",
+                "index cfd",
+                "FXOpen",
+            ),
+            ("CASH", "NDQ100", "Nasdaq Cash", "index cfd", "Eightcap"),
+            (
+                "CW",
+                "NDQCC",
+                "Cititwarrants 36.2423 NDQ 07-Jun-35 Instal Mini",
+                "warrant",
+                "CHIXAU",
+            ),
+            ("CR", "NDQUSD", "Nasdaq666", "spot crypto", "CRYPTO"),
+            (
+                "3L",
+                "NDQ3L",
+                "SG Issuer SA Exchange Traded Product 2022-03-18",
+                "fund etf",
+                "Euronext Paris",
+            ),
+            (
+                "3S",
+                "NDQ3S",
+                "SG Issuer SA War 2022- Without fixed mat on ...",
+                "fund etf",
+                "Euronext Paris",
+            ),
+            (
+                "USD",
+                "NDQUSD",
+                "US Tech (NDQ) / US Dollar",
+                "index cfd",
+                "easyMarkets",
+            ),
+        ];
+        let search_overlay = if self.symbol_search_open {
+            let mut filters = div().flex().items_center().gap_2();
+            for (idx, label) in search_filters.iter().enumerate() {
+                let active = idx == 0;
+                let bg = if active { rgb(0x1f2937) } else { rgb(0x111827) };
+                let text = if active { rgb(0xffffff) } else { rgb(0x9ca3af) };
+                filters = filters.child(
+                    div()
+                        .px_2()
+                        .py_1()
+                        .rounded_md()
+                        .bg(bg)
+                        .text_xs()
+                        .text_color(text)
+                        .child(*label),
+                );
+            }
+
+            let mut results_list = div()
+                .flex()
+                .flex_col()
+                .flex_1()
+                .bg(rgb(0x0b1220))
+                .border_1()
+                .border_color(rgb(0x1f2937))
+                .rounded_md()
+                .h_full()
+                .id("search-results")
+                .overflow_y_scroll();
+            for (idx, (badge, symbol, name, market, venue)) in search_results.iter().enumerate() {
+                let active = idx == 0;
+                let row_bg = if active { rgb(0x0f172a) } else { rgb(0x0b1220) };
+                let border_color = if active { rgb(0x2563eb) } else { rgb(0x1f2937) };
+                let close_row = _cx.listener(|this: &mut Self, _: &MouseDownEvent, window, _| {
+                    this.symbol_search_open = false;
+                    window.refresh();
+                });
+
+                let mut row = div()
+                    .px_3()
+                    .py_2()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .bg(row_bg)
+                    .on_mouse_down(MouseButton::Left, close_row)
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_3()
+                            .child(
+                                div()
+                                    .w(px(32.))
+                                    .h(px(32.))
+                                    .rounded_full()
+                                    .bg(rgb(0x1f2937))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .text_sm()
+                                    .text_color(gpui::white())
+                                    .child(*badge),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .gap_1()
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .gap_2()
+                                            .child(
+                                                div()
+                                                    .text_sm()
+                                                    .text_color(gpui::white())
+                                                    .child(*symbol),
+                                            )
+                                            .child(
+                                                div()
+                                                    .px_2()
+                                                    .py_1()
+                                                    .rounded_sm()
+                                                    .bg(rgb(0x1f2937))
+                                                    .text_xs()
+                                                    .text_color(rgb(0x9ca3af))
+                                                    .child(*market),
+                                            ),
+                                    )
+                                    .child(div().text_xs().text_color(rgb(0x9ca3af)).child(*name)),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .text_xs()
+                            .text_color(rgb(0x9ca3af))
+                            .child(*market)
+                            .child(
+                                div()
+                                    .px_2()
+                                    .py_1()
+                                    .rounded_sm()
+                                    .bg(rgb(0x1f2937))
+                                    .text_xs()
+                                    .text_color(gpui::white())
+                                    .child(*venue),
+                            ),
+                    );
+
+                row = if active {
+                    row.border_1().border_color(border_color)
+                } else {
+                    row.border_b_1().border_color(border_color)
+                };
+                results_list = results_list.child(row);
+            }
+
+            let close_overlay = _cx.listener(|this: &mut Self, _: &MouseDownEvent, window, _| {
+                this.symbol_search_open = false;
+                window.refresh();
+            });
+
+            Some(
+                div()
+                    .absolute()
+                    .left(px(0.))
+                    .top(px(0.))
+                    .w_full()
+                    .h_full()
+                    .bg(rgba(0x0b122080))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .p_3()
+                    .child(
+                        div()
+                            .w(px(920.))
+                            .h(px(630.))
+                            .bg(rgb(0x0f172a))
+                            .border_1()
+                            .border_color(rgb(0x1f2937))
+                            .rounded_md()
+                            .shadow_lg()
+                            .p_3()
+                            .flex()
+                            .flex_col()
+                            .gap_2()
+                            .overflow_hidden()
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .gap_2()
+                                    .h_full()
+                                    .overflow_hidden()
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .justify_between()
+                                            .child(
+                                                div()
+                                                    .text_sm()
+                                                    .text_color(gpui::white())
+                                                    .child("Symbol Search"),
+                                            )
+                                            .child(
+                                                div()
+                                                    .w(px(24.))
+                                                    .h(px(24.))
+                                                    .rounded_full()
+                                                    .bg(rgb(0x1f2937))
+                                                    .flex()
+                                                    .items_center()
+                                                    .justify_center()
+                                                    .text_xs()
+                                                    .text_color(gpui::white())
+                                                    .on_mouse_down(MouseButton::Left, close_overlay)
+                                                    .child("X"),
+                                            ),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .gap_2()
+                                            .px_3()
+                                            .py_1()
+                                            .rounded_md()
+                                            .border_1()
+                                            .border_color(rgb(0x1f2937))
+                                            .bg(rgb(0x111827))
+                                            .child(
+                                                div()
+                                                    .text_sm()
+                                                    .text_color(rgb(0x9ca3af))
+                                                    .child("Search"),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_sm()
+                                                    .text_color(gpui::white())
+                                                    .child("NDQ"),
+                                            ),
+                                    )
+                                    .child(filters)
+                                    .child(results_list)
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(rgb(0x6b7280))
+                                            .child("Search using ISIN and CUSIP codes"),
+                                    ),
+                            ),
+                    ),
+            )
+        } else {
+            None
+        };
+
+        let track_header_controls =
+            _cx.processor(|this: &mut Self, bounds: Vec<Bounds<Pixels>>, _, _| {
+                this.interval_trigger_bounds = bounds.get(1).copied();
+            });
+
+        let header_controls = div()
+            .relative()
+            .flex()
+            .items_center()
+            .gap_2()
+            .child(search_input)
+            .child(interval_trigger)
+            .on_children_prepainted(track_header_controls);
 
         let interval_menu = if self.interval_select_open {
+            let (menu_left, menu_top, menu_width) =
+                if let Some(bounds) = self.interval_trigger_bounds {
+                    (
+                        f32::from(bounds.origin.x),
+                        f32::from(bounds.origin.y + bounds.size.height) + OVERLAY_GAP,
+                        f32::from(bounds.size.width),
+                    )
+                } else {
+                    (0.0, 148.0, 128.0)
+                };
+
             let mut menu = div()
                 .absolute()
-                .bottom(px(96.))
-                .left(px(24.))
+                .left(px(menu_left))
+                .top(px(menu_top))
                 .flex()
                 .flex_col()
                 .bg(rgb(0x0f172a))
@@ -352,7 +690,7 @@ impl Render for ChartView {
                     div()
                         .px_3()
                         .py_2()
-                        .w(px(160.))
+                        .w(px(menu_width))
                         .bg(bg)
                         .text_sm()
                         .text_color(gpui::white())
@@ -370,34 +708,7 @@ impl Render for ChartView {
             .flex()
             .items_center()
             .gap_3()
-            .child(
-                div()
-                    .px_3()
-                    .py_2()
-                    .rounded_md()
-                    .bg(rgb(0x1f2937))
-                    .text_sm()
-                    .text_color(gpui::white())
-                    .child("GPUI"),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .child(
-                        div()
-                            .text_lg()
-                            .text_color(gpui::white())
-                            .child(symbol_label.clone()),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(rgb(0x9ca3af))
-                            .child(self.source.clone()),
-                    ),
-            )
+            .child(header_controls)
             .child(header_chip("Indicators"))
             .child(header_chip("Compare"))
             .child(header_chip("Alerts"))
@@ -436,12 +747,7 @@ impl Render for ChartView {
             );
 
         let header = chart_header(header_left, header_right);
-        let footer = chart_footer(
-            interval_select,
-            interval_label,
-            candle_count,
-            range_text.clone(),
-        );
+        let footer = chart_footer(div(), interval_label, candle_count, range_text.clone());
 
         let chart_area = div()
             .flex()
@@ -690,12 +996,16 @@ impl Render for ChartView {
             .child(body)
             .child(footer);
 
-        if let Some(tip) = tooltip {
-            root = root.child(tip);
+        if let Some(overlay) = search_overlay {
+            root = root.child(overlay);
         }
 
         if let Some(menu) = interval_menu {
             root = root.child(menu);
+        }
+
+        if let Some(tip) = tooltip {
+            root = root.child(tip);
         }
 
         root
