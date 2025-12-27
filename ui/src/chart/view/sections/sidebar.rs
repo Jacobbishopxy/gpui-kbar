@@ -1,12 +1,8 @@
-use gpui::{Div, SharedString, div, prelude::*, px, rgb};
+use gpui::{Div, div, prelude::*, px, rgb};
 
-use crate::chart::view::{widgets::{header_chip, stat_row}, SIDEBAR_WIDTH};
+use crate::chart::view::SIDEBAR_WIDTH;
 
-pub fn sidebar(
-    watchlist_panel: Div,
-    instrument_card: Div,
-    trading_stub: Div,
-) -> Div {
+pub fn sidebar(watchlist_panel: Div, instrument_card: Div, trading_stub: Div) -> Div {
     div()
         .w(px(SIDEBAR_WIDTH))
         .bg(rgb(0x0b1220))

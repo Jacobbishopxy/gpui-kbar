@@ -30,10 +30,11 @@ pub fn header_controls(
         .on_mouse_down(MouseButton::Left, toggle_symbol_search)
         .child(div().text_color(gpui::white()).child("Search symbols"));
 
-    let track_header_controls =
-        cx.processor(|this: &mut ChartView, bounds: Vec<Bounds<gpui::Pixels>>, _, _| {
+    let track_header_controls = cx.processor(
+        |this: &mut ChartView, bounds: Vec<Bounds<gpui::Pixels>>, _, _| {
             this.interval_trigger_bounds = bounds.get(1).copied();
-        });
+        },
+    );
 
     let header_controls = div()
         .relative()

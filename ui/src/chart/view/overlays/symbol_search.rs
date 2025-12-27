@@ -1,6 +1,4 @@
-use gpui::{
-    Context, Div, MouseButton, MouseDownEvent, SharedString, Window, div, prelude::*, px, rgb, rgba,
-};
+use gpui::{Context, Div, MouseButton, MouseDownEvent, div, prelude::*, px, rgb, rgba};
 
 use crate::chart::view::ChartView;
 
@@ -19,10 +17,34 @@ pub fn symbol_search_overlay(view: &mut ChartView, cx: &mut Context<ChartView>) 
     let search_results = [
         ("100", "NDQ", "US 100 Index", "index cfd", "TVC"),
         ("ETF", "NDQ", "BetaShares NASDAQ 100 ETF", "fund etf", "ASX"),
-        ("ETF", "NDQ", "Invesco QQQ Trust Series I", "fund etf", "TRADEGATE"),
-        ("ETF", "NDQ", "Invesco QQQ Trust Series I", "fund etf", "BER"),
-        ("ETF", "NDQ", "Invesco QQQ Trust Series I", "fund etf", "HAM"),
-        ("100", "NDQM", "NASDAQ 100 Index (NDX)", "index cfd", "FXOpen"),
+        (
+            "ETF",
+            "NDQ",
+            "Invesco QQQ Trust Series I",
+            "fund etf",
+            "TRADEGATE",
+        ),
+        (
+            "ETF",
+            "NDQ",
+            "Invesco QQQ Trust Series I",
+            "fund etf",
+            "BER",
+        ),
+        (
+            "ETF",
+            "NDQ",
+            "Invesco QQQ Trust Series I",
+            "fund etf",
+            "HAM",
+        ),
+        (
+            "100",
+            "NDQM",
+            "NASDAQ 100 Index (NDX)",
+            "index cfd",
+            "FXOpen",
+        ),
         ("CASH", "NDQ100", "Nasdaq Cash", "index cfd", "Eightcap"),
         (
             "CW",
@@ -46,7 +68,13 @@ pub fn symbol_search_overlay(view: &mut ChartView, cx: &mut Context<ChartView>) 
             "fund etf",
             "Euronext Paris",
         ),
-        ("USD", "NDQUSD", "US Tech (NDQ) / US Dollar", "index cfd", "easyMarkets"),
+        (
+            "USD",
+            "NDQUSD",
+            "US Tech (NDQ) / US Dollar",
+            "index cfd",
+            "easyMarkets",
+        ),
     ];
 
     let mut filters = div().flex().items_center().gap_2();
@@ -241,17 +269,9 @@ pub fn symbol_search_overlay(view: &mut ChartView, cx: &mut Context<ChartView>) 
                                     .border_color(rgb(0x1f2937))
                                     .bg(rgb(0x111827))
                                     .child(
-                                        div()
-                                            .text_sm()
-                                            .text_color(rgb(0x9ca3af))
-                                            .child("Search"),
+                                        div().text_sm().text_color(rgb(0x9ca3af)).child("Search"),
                                     )
-                                    .child(
-                                        div()
-                                            .text_sm()
-                                            .text_color(gpui::white())
-                                            .child("NDQ"),
-                                    ),
+                                    .child(div().text_sm().text_color(gpui::white()).child("NDQ")),
                             )
                             .child(filters)
                             .child(results_list)

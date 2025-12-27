@@ -2,8 +2,7 @@ use std::path::Path;
 
 use core::Interval;
 use gpui::{
-    Bounds, Context, Div, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels,
-    Render, ScrollWheelEvent, SharedString, Window, div, prelude::*, px, rgb, rgba,
+    Context, MouseButton, MouseDownEvent, Render, SharedString, Window, div, prelude::*, px, rgb,
 };
 use time::macros::format_description;
 
@@ -13,13 +12,11 @@ use super::super::{
     header::chart_header,
 };
 use super::context::format_price_range;
-use super::overlays::symbol_search::symbol_search_overlay;
+use super::sections::body::chart_body;
 use super::sections::header::header_controls;
 use super::sections::sidebar::sidebar;
 use super::widgets::{header_chip, stat_row, toolbar_button};
-use super::{
-    ChartView, OVERLAY_GAP, SIDEBAR_WIDTH, TOOLBAR_WIDTH, padded_bounds,
-};
+use super::{ChartView, TOOLBAR_WIDTH, padded_bounds};
 
 const INTERVAL_OPTIONS: &[(Option<Interval>, &str)] = &[
     (None, "raw"),
@@ -117,140 +114,30 @@ impl Render for ChartView {
             .map(|v| format!("{v:.2}"))
             .unwrap_or_else(|| "--".to_string());
 
-        let track_chart_bounds =
-            _cx.processor(|this: &mut Self, bounds: Vec<Bounds<Pixels>>, _, _| {
-                if let Some(canvas_bounds) = bounds.first() {
-                    this.chart_bounds = Some(*canvas_bounds);
-                }
-            });
-
-        let handle_scroll = _cx.listener(|this: &mut Self, event: &ScrollWheelEvent, window, _| {
-            this.handle_scroll(event, window);
-        });
-
-        let handle_mouse_down =
-            _cx.listener(|this: &mut Self, event: &MouseDownEvent, window, _| {
-                if event.button == MouseButton::Left {
-                    this.dragging = true;
-                    this.last_drag_position =
-                        Some((f32::from(event.position.x), f32::from(event.position.y)));
-                    window.refresh();
-                }
-            });
-
-        let handle_mouse_up = _cx.listener(|this: &mut Self, _: &MouseUpEvent, window, _| {
-            this.dragging = false;
-            this.last_drag_position = None;
-            window.refresh();
-        });
-
-        let handle_mouse_move =
-            _cx.listener(move |this: &mut Self, event: &MouseMoveEvent, window, _| {
-                this.handle_hover(event, candle_count);
-                this.handle_drag(event, window);
-            });
-
         let chart = chart_canvas(candles, price_min, price_max, hover_local, hover_y)
             .flex_1()
             .w_full()
             .h_full();
-
-        let canvas_region = div()
+        let volume = volume_canvas(volume_candles, hover_local)
             .flex_1()
             .w_full()
-            .h_full()
-            .relative()
-            .on_children_prepainted(track_chart_bounds)
-            .child(chart);
+            .h_full();
 
-        let price_axis = div()
-            .w(px(82.))
-            .h_full()
-            .flex()
-            .flex_col()
-            .justify_between()
-            .items_end()
-            .px_2()
-            .bg(rgb(0x0f172a))
-            .border_r_1()
-            .border_color(rgb(0x1f2937))
-            .text_xs()
-            .text_color(rgb(0x9ca3af))
-            .relative()
-            .child(price_labels[0].clone())
-            .child(price_labels[1].clone())
-            .child(price_labels[2].clone());
+        let start_label = start_label.unwrap_or_else(|| "---".into());
+        let mid_label = mid_label.unwrap_or_else(|| "---".into());
+        let end_label = end_label.unwrap_or_else(|| "---".into());
 
-        let hover_price_label =
-            if let (Some((_, y)), Some(bounds)) = (self.hover_position, self.chart_bounds) {
-                let height = f32::from(bounds.size.height);
-                if height <= 0.0 {
-                    None
-                } else {
-                    let oy = f32::from(bounds.origin.y);
-                    let frac = ((y - oy) / height).clamp(0.0, 1.0);
-                    let price = self.price_max - (self.price_max - self.price_min) * frac as f64;
-                    let label_h = 18.0;
-                    let mut top = frac * height - label_h * 0.5;
-                    top = top.clamp(0.0, height - label_h);
-
-                    Some(
-                        div()
-                            .absolute()
-                            .left(px(0.))
-                            .top(px(top))
-                            .w(px(82.))
-                            .h(px(label_h))
-                            .px_1()
-                            .bg(rgba(0x1f293780))
-                            .border_1()
-                            .border_color(rgba(0x37415180))
-                            .rounded_sm()
-                            .flex()
-                            .items_center()
-                            .justify_end()
-                            .text_xs()
-                            .text_color(gpui::white())
-                            .child(format!("{price:.4}")),
-                    )
-                }
-            } else {
-                None
-            };
-
-        let price_axis = if let Some(label) = hover_price_label {
-            price_axis.child(label)
-        } else {
-            price_axis
-        };
-
-        let chart_row = div()
-            .flex_1()
-            .flex()
-            .w_full()
-            .h_full()
-            .min_h(px(320.))
-            .on_mouse_down(MouseButton::Left, handle_mouse_down)
-            .on_mouse_move(handle_mouse_move)
-            .on_mouse_up(MouseButton::Left, handle_mouse_up)
-            .on_scroll_wheel(handle_scroll)
-            .child(price_axis)
-            .child(canvas_region);
-
-        let time_axis = div()
-            .h(px(28.))
-            .px_3()
-            .flex()
-            .items_center()
-            .justify_between()
-            .text_xs()
-            .text_color(rgb(0x9ca3af))
-            .bg(rgb(0x0f172a))
-            .border_t_1()
-            .border_color(rgb(0x1f2937))
-            .child(start_label.unwrap_or_else(|| "---".into()))
-            .child(mid_label.unwrap_or_else(|| "---".into()))
-            .child(end_label.unwrap_or_else(|| "---".into()));
+        let chart_area = chart_body(
+            self,
+            _cx,
+            price_labels,
+            chart,
+            volume,
+            start_label,
+            mid_label,
+            end_label,
+            candle_count,
+        );
 
         let toggle_interval_select =
             _cx.listener(|this: &mut Self, _: &MouseDownEvent, window, _| {
@@ -274,31 +161,6 @@ impl Render for ChartView {
             .text_color(gpui::white())
             .on_mouse_down(MouseButton::Left, toggle_interval_select)
             .child(select_label.clone());
-
-        let toggle_symbol_search =
-            _cx.listener(|this: &mut Self, _: &MouseDownEvent, window, _| {
-                this.symbol_search_open = !this.symbol_search_open;
-                this.interval_select_open = false;
-                window.refresh();
-            });
-
-        let search_input = div()
-            .flex()
-            .items_center()
-            .gap_2()
-            .px_3()
-            .py_2()
-            .w(px(220.))
-            .rounded_md()
-            .border_1()
-            .border_color(rgb(0x1f2937))
-            .bg(rgb(0x111827))
-            .text_sm()
-            .text_color(rgb(0x9ca3af))
-            .on_mouse_down(MouseButton::Left, toggle_symbol_search)
-            .child(div().text_color(gpui::white()).child("Search symbols"));
-
-        let search_overlay = symbol_search_overlay(self, _cx);
 
         let (header_controls, search_overlay) = header_controls(self, _cx, interval_trigger);
 
@@ -352,42 +214,6 @@ impl Render for ChartView {
 
         let header = chart_header(header_left, header_right);
         let footer = chart_footer(div(), interval_label, candle_count, range_text.clone());
-
-        let chart_area = div()
-            .flex()
-            .flex_col()
-            .flex_1()
-            .w_full()
-            .h_full()
-            .min_h(px(420.))
-            .bg(rgb(0x0b1220))
-            .border_1()
-            .border_color(rgb(0x1f2937))
-            .rounded_md()
-            .overflow_hidden()
-            .child(chart_row)
-            .child(
-                div()
-                    .flex()
-                    .w_full()
-                    .h(px(120.))
-                    .min_h(px(100.))
-                    .child(
-                        div()
-                            .w(px(82.))
-                            .h_full()
-                            .bg(rgb(0x0f172a))
-                            .border_r_1()
-                            .border_color(rgb(0x1f2937)),
-                    )
-                    .child(
-                        volume_canvas(volume_candles, hover_local)
-                            .flex_1()
-                            .w_full()
-                            .h_full(),
-                    ),
-            )
-            .child(time_axis);
 
         let toolbar_items = [
             "Cursor", "Trend", "Fib", "Brush", "Text", "Measure", "Zoom", "Cross",

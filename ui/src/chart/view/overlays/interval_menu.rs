@@ -3,7 +3,11 @@ use gpui::{Div, MouseButton, SharedString, div, prelude::*, px, rgb};
 
 use crate::chart::view::{ChartView, OVERLAY_GAP};
 
-pub fn interval_menu(view: &mut ChartView, cx: &mut gpui::Context<ChartView>, options: &[(Option<Interval>, &str)]) -> Option<Div> {
+pub fn interval_menu(
+    view: &mut ChartView,
+    cx: &mut gpui::Context<ChartView>,
+    options: &[(Option<Interval>, &str)],
+) -> Option<Div> {
     let (menu_left, menu_top, menu_width) = if let Some(bounds) = view.interval_trigger_bounds {
         (
             f32::from(bounds.origin.x),
@@ -27,11 +31,17 @@ pub fn interval_menu(view: &mut ChartView, cx: &mut gpui::Context<ChartView>, op
 
     for (option, label) in options.iter().cloned() {
         let is_active = view.interval == option;
-        let handler = cx.listener(move |this: &mut ChartView, _: &gpui::MouseDownEvent, window, _| {
-            this.apply_interval(option);
-            window.refresh();
-        });
-        let bg = if is_active { rgb(0x1f2937) } else { rgb(0x0f172a) };
+        let handler = cx.listener(
+            move |this: &mut ChartView, _: &gpui::MouseDownEvent, window, _| {
+                this.apply_interval(option);
+                window.refresh();
+            },
+        );
+        let bg = if is_active {
+            rgb(0x1f2937)
+        } else {
+            rgb(0x0f172a)
+        };
         let text = SharedString::from(label.to_string());
 
         menu = menu.child(
