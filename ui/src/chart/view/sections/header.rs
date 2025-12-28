@@ -32,7 +32,13 @@ pub fn header_controls(
 
     let track_header_controls = cx.processor(
         |this: &mut ChartView, bounds: Vec<Bounds<gpui::Pixels>>, _, _| {
-            this.interval_trigger_bounds = bounds.get(1).copied();
+            if let Some(trigger_bounds) = bounds.get(1) {
+                this.interval_trigger_origin = (
+                    f32::from(trigger_bounds.origin.x),
+                    f32::from(trigger_bounds.origin.y),
+                );
+                this.interval_trigger_height = f32::from(trigger_bounds.size.height);
+            }
         },
     );
 

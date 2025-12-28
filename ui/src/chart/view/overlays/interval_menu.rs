@@ -7,16 +7,17 @@ pub fn interval_menu(
     view: &mut ChartView,
     cx: &mut gpui::Context<ChartView>,
     options: &[(Option<Interval>, &str)],
+    origin: (f32, f32),
+    trigger_height: f32,
+    trigger_width: f32,
 ) -> Option<Div> {
-    let (menu_left, menu_top, menu_width) = if let Some(bounds) = view.interval_trigger_bounds {
-        (
-            f32::from(bounds.origin.x),
-            f32::from(bounds.origin.y + bounds.size.height) + OVERLAY_GAP,
-            f32::from(bounds.size.width),
-        )
+    let menu_width = if trigger_width > 0.0 {
+        trigger_width
     } else {
-        (0.0, 148.0, 128.0)
+        super::super::INTERVAL_TRIGGER_WIDTH
     };
+    let menu_top = origin.1 + trigger_height.max(0.0) + OVERLAY_GAP;
+    let menu_left = origin.0;
 
     let mut menu = div()
         .absolute()

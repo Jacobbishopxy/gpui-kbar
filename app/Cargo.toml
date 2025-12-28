@@ -12,5 +12,9 @@ anyhow.workspace = true
 time.workspace = true
 
 [[bin]]
-name = "app-runtime"
+name = "debug"
+path = "src/debug.rs"
+
+[[bin]]
+name = "runtime"
 path = "src/runtime.rs"

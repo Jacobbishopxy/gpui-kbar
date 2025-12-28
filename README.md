@@ -1,5 +1,5 @@
 # GPUI KBar
 
 - generate kbar sample data: `uv run scripts/generate_kbar.py -n 500 -o data/sample.csv -i 300 --seed 42`
-- run GUI: `cargo run -p app -- data/sample.csv`
-- run runtime picker UI: `cargo run -p app --bin app-runtime`
+- run debug: `cargo run -p app --bin debug .\data\sample.csv`
+- run runtime app: `cargo run -p app --bin runtime`

@@ -16,7 +16,7 @@ use super::sections::body::chart_body;
 use super::sections::header::header_controls;
 use super::sections::sidebar::sidebar;
 use super::widgets::{header_chip, stat_row, toolbar_button};
-use super::{ChartView, TOOLBAR_WIDTH, padded_bounds};
+use super::{ChartView, INTERVAL_TRIGGER_WIDTH, TOOLBAR_WIDTH, padded_bounds};
 
 const INTERVAL_OPTIONS: &[(Option<Interval>, &str)] = &[
     (None, "raw"),
@@ -152,7 +152,7 @@ impl Render for ChartView {
             .gap_2()
             .px_3()
             .py_2()
-            .w(px(128.))
+            .w(px(INTERVAL_TRIGGER_WIDTH))
             .rounded_md()
             .border_1()
             .border_color(rgb(0x1f2937))
@@ -163,12 +163,6 @@ impl Render for ChartView {
             .child(select_label.clone());
 
         let (header_controls, search_overlay) = header_controls(self, _cx, interval_trigger);
-
-        let interval_menu = if self.interval_select_open {
-            super::overlays::interval_menu::interval_menu(self, _cx, INTERVAL_OPTIONS)
-        } else {
-            None
-        };
 
         let header_left = div()
             .flex()
@@ -415,18 +409,47 @@ impl Render for ChartView {
             .child(body)
             .child(footer);
 
+        let track_root = _cx.processor(|this: &mut Self, bounds: Vec<gpui::Bounds<gpui::Pixels>>, _, _| {
+            if let Some(root_bounds) = bounds.first() {
+                this.root_origin = (
+                    f32::from(root_bounds.origin.x),
+                    f32::from(root_bounds.origin.y),
+                );
+            }
+        });
+
+        let mut layered = div()
+            .relative()
+            .on_children_prepainted(track_root)
+            .child(root);
+
         if let Some(overlay) = search_overlay {
-            root = root.child(overlay);
+            layered = layered.child(overlay);
         }
 
-        if let Some(menu) = interval_menu {
-            root = root.child(menu);
+        if let Some(menu) = if self.interval_select_open {
+            let origin = (
+                self.interval_trigger_origin.0 - self.root_origin.0,
+                self.interval_trigger_origin.1 - self.root_origin.1,
+            );
+            super::overlays::interval_menu::interval_menu(
+                self,
+                _cx,
+                INTERVAL_OPTIONS,
+                origin,
+                self.interval_trigger_height,
+                INTERVAL_TRIGGER_WIDTH,
+            )
+        } else {
+            None
+        } {
+            layered = layered.child(menu);
         }
 
         if let Some(tip) = tooltip {
-            root = root.child(tip);
+            layered = layered.child(tip);
         }
 
-        root
+        layered
     }
 }

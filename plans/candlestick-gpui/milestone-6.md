@@ -29,4 +29,5 @@ Status
 - [x] Symbol search rebuilt as a centered TradingView-style popover with filters, scrollable results, and compact sizing.
 - [x] Started UI refactor: extracted symbol search overlay + shared widgets/context modules; added sections/overlays scaffolding to slim render.rs.
 - [x] Further refactor: moved header/sidebar layouts and interval menu into dedicated modules to keep render.rs readable.
+- [x] Interval selector menu re-anchored using local positioning so header controls stay aligned when outer layouts (e.g. runtime sidebar, future collapsible panes) shift.
 - [ ] Wire watchlist/symbol switching + data reloads; implement overlays/drawings/interactions polish; snapshot tests/perf passes.
