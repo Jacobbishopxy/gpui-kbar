@@ -8,13 +8,14 @@ use time::macros::format_description;
 
 use super::super::{
     canvas::{chart_canvas, volume_canvas},
-    footer::chart_footer,
+    footer::{chart_footer, range_button},
     header::chart_header,
 };
 use super::context::format_price_range;
 use super::sections::body::chart_body;
 use super::sections::header::header_controls;
 use super::sections::sidebar::sidebar;
+use super::state::QUICK_RANGE_WINDOWS;
 use super::widgets::{header_chip, stat_row, toolbar_button};
 use super::{ChartView, INTERVAL_TRIGGER_WIDTH, TOOLBAR_WIDTH, padded_bounds};
 
@@ -207,7 +208,23 @@ impl Render for ChartView {
             );
 
         let header = chart_header(header_left, header_right);
-        let footer = chart_footer(div(), interval_label, candle_count, range_text.clone());
+        let mut quick_ranges = div().flex().items_center().gap_2();
+        for (idx, (label, _)) in QUICK_RANGE_WINDOWS.iter().enumerate() {
+            let is_active = self.active_range_index == idx;
+            let handle = _cx.listener(move |this: &mut Self, _: &MouseDownEvent, window, _| {
+                this.apply_range_index(idx);
+                window.refresh();
+            });
+            quick_ranges = quick_ranges
+                .child(range_button(*label, is_active).on_mouse_down(MouseButton::Left, handle));
+        }
+
+        let footer = chart_footer(
+            quick_ranges,
+            interval_label,
+            candle_count,
+            range_text.clone(),
+        );
 
         let toolbar_items = [
             "Cursor", "Trend", "Fib", "Brush", "Text", "Measure", "Zoom", "Cross",
@@ -409,17 +426,21 @@ impl Render for ChartView {
             .child(body)
             .child(footer);
 
-        let track_root = _cx.processor(|this: &mut Self, bounds: Vec<gpui::Bounds<gpui::Pixels>>, _, _| {
-            if let Some(root_bounds) = bounds.first() {
-                this.root_origin = (
-                    f32::from(root_bounds.origin.x),
-                    f32::from(root_bounds.origin.y),
-                );
-            }
-        });
+        let track_root = _cx.processor(
+            |this: &mut Self, bounds: Vec<gpui::Bounds<gpui::Pixels>>, _, _| {
+                if let Some(root_bounds) = bounds.first() {
+                    this.root_origin = (
+                        f32::from(root_bounds.origin.x),
+                        f32::from(root_bounds.origin.y),
+                    );
+                }
+            },
+        );
 
         let mut layered = div()
             .relative()
+            .w_full()
+            .h_full()
             .on_children_prepainted(track_root)
             .child(root);
 

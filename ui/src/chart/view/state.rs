@@ -1,7 +1,19 @@
 use core::{Candle, Interval, bounds, resample};
 use gpui::{Bounds, Pixels, SharedString};
+use time::Duration;
 
 use super::super::ChartMeta;
+
+pub const QUICK_RANGE_WINDOWS: [(&str, Option<Duration>); 8] = [
+    ("1D", Some(Duration::days(1))),
+    ("5D", Some(Duration::days(5))),
+    ("1M", Some(Duration::days(30))),
+    ("3M", Some(Duration::days(90))),
+    ("6M", Some(Duration::days(180))),
+    ("1Y", Some(Duration::days(365))),
+    ("5Y", Some(Duration::days(365 * 5))),
+    ("ALL", None),
+];
 
 pub struct ChartView {
     pub(super) base_candles: Vec<Candle>,
@@ -52,7 +64,7 @@ impl ChartView {
             hover_position: None,
             interval_select_open: false,
             symbol_search_open: false,
-            active_range_index: 0,
+            active_range_index: QUICK_RANGE_WINDOWS.len().saturating_sub(1),
         }
     }
 
@@ -105,6 +117,7 @@ impl ChartView {
         self.hover_position = None;
         self.interval_select_open = false;
         self.symbol_search_open = false;
+        self.apply_range_index(self.active_range_index);
     }
 
     pub(crate) fn replace_data(&mut self, base: Vec<Candle>, source: String) {
@@ -112,6 +125,45 @@ impl ChartView {
         let interval = self.interval;
         self.apply_interval(interval);
         self.source = source;
+    }
+
+    pub(super) fn apply_range_index(&mut self, index: usize) {
+        let clamped_index = index.min(QUICK_RANGE_WINDOWS.len().saturating_sub(1));
+        self.active_range_index = clamped_index;
+        self.interval_select_open = false;
+        self.symbol_search_open = false;
+        self.hover_index = None;
+        self.hover_position = None;
+        self.dragging = false;
+        self.last_drag_position = None;
+
+        if self.candles.is_empty() {
+            return;
+        }
+
+        let (_, duration) = QUICK_RANGE_WINDOWS[clamped_index];
+        match duration {
+            Some(duration) => {
+                let last_ts = self.candles.last().map(|c| c.timestamp);
+                if let Some(end) = last_ts {
+                    let start = end - duration;
+                    let start_idx = match self.candles.binary_search_by(|c| c.timestamp.cmp(&start))
+                    {
+                        Ok(i) => i,
+                        Err(i) => i,
+                    };
+                    let start_idx = start_idx.min(self.candles.len().saturating_sub(1));
+                    let visible = self.candles.len().saturating_sub(start_idx).max(1);
+                    self.zoom = (self.candles.len() as f32 / visible as f32)
+                        .clamp(1.0, self.candles.len() as f32);
+                    self.view_offset = self.clamp_offset(start_idx as f32, visible);
+                }
+            }
+            None => {
+                self.zoom = 1.0;
+                self.view_offset = 0.0;
+            }
+        }
     }
 }
 
