@@ -311,6 +311,32 @@ impl DuckDbStore {
 
         Ok(result)
     }
+
+    pub fn set_session_value(&self, key: &str, value: &str) -> Result<(), StoreError> {
+        if self.connections().count() == 0 {
+            return Err(StoreError::NoBackend);
+        }
+        for conn in self.connections() {
+            conn.execute(
+                "INSERT INTO session_state(key, value) VALUES (?, ?)
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                params![key, value],
+            )?;
+        }
+        Ok(())
+    }
+
+    pub fn get_session_value(&self, key: &str) -> Result<Option<String>, StoreError> {
+        for conn in self.connections() {
+            let mut stmt = conn.prepare("SELECT value FROM session_state WHERE key = ? LIMIT 1")?;
+            let mut rows = stmt.query([key])?;
+            if let Some(row) = rows.next()? {
+                let v: String = row.get(0)?;
+                return Ok(Some(v));
+            }
+        }
+        Ok(None)
+    }
 }
 
 fn init_schema(conn: &Connection) -> Result<(), StoreError> {
@@ -334,6 +360,11 @@ fn init_schema(conn: &Connection) -> Result<(), StoreError> {
             value DOUBLE NOT NULL
         );
         CREATE INDEX IF NOT EXISTS idx_indicator_symbol_ts ON indicator_values(symbol, indicator, timestamp);
+
+        CREATE TABLE IF NOT EXISTS session_state (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
         ",
     )?;
     Ok(())
@@ -426,6 +457,14 @@ mod tests {
         let loaded_indicators = store.load_indicator_values("ABC", "SMA", None).unwrap();
         assert_eq!(loaded_indicators.len(), 3);
         assert_eq!(loaded_indicators[0].1, 10.0);
+
+        store
+            .set_session_value("active_source", "ABC")
+            .expect("set session");
+        let saved = store
+            .get_session_value("active_source")
+            .expect("get session");
+        assert_eq!(saved, Some("ABC".to_string()));
 
         std::fs::remove_file(path).ok();
     }

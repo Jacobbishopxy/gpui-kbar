@@ -1,8 +1,11 @@
+use std::{cell::RefCell, rc::Rc};
+
 use core::{Candle, Interval, bounds, resample};
 use gpui::{Bounds, Pixels, SharedString};
 use time::Duration;
 
 use super::super::ChartMeta;
+use core::DuckDbStore;
 
 pub const QUICK_RANGE_WINDOWS: [(&str, Option<Duration>); 8] = [
     ("1D", Some(Duration::days(1))),
@@ -20,7 +23,7 @@ pub struct ChartView {
     pub(super) candles: Vec<Candle>,
     pub(super) price_min: f64,
     pub(super) price_max: f64,
-    pub(super) interval: Option<Interval>,
+    interval: Option<Interval>,
     pub(super) source: String,
     pub(super) view_offset: f32,
     pub(super) zoom: f32,
@@ -34,14 +37,19 @@ pub struct ChartView {
     pub(super) hover_position: Option<(f32, f32)>,
     pub(super) interval_select_open: bool,
     pub(super) symbol_search_open: bool,
-    pub(super) active_range_index: usize,
-    pub(super) replay_mode: bool,
-    pub(super) loading_symbol: Option<String>,
-    pub(super) load_error: Option<String>,
+    active_range_index: usize,
+    replay_mode: bool,
+    pub loading_symbol: Option<String>,
+    pub load_error: Option<String>,
+    pub store: Option<Rc<RefCell<DuckDbStore>>>,
 }
 
 impl ChartView {
-    pub(crate) fn new(base_candles: Vec<Candle>, meta: ChartMeta) -> Self {
+    pub(crate) fn new(
+        base_candles: Vec<Candle>,
+        meta: ChartMeta,
+        store: Option<Rc<RefCell<DuckDbStore>>>,
+    ) -> Self {
         let base = base_candles;
         let (candles, interval) = match meta.initial_interval {
             Some(i) => (resample(&base, i), Some(i)),
@@ -71,10 +79,11 @@ impl ChartView {
             replay_mode: false,
             loading_symbol: None,
             load_error: None,
+            store,
         }
     }
 
-    pub(super) fn interval_label(interval: Option<Interval>) -> SharedString {
+    pub fn interval_label(interval: Option<Interval>) -> SharedString {
         let label = match interval {
             Some(Interval::Second(n)) => format!("{n}s"),
             Some(Interval::Minute(n)) => format!("{n}m"),
@@ -83,6 +92,18 @@ impl ChartView {
             None => "raw".to_string(),
         };
         SharedString::from(label)
+    }
+
+    pub fn current_interval(&self) -> Option<Interval> {
+        self.interval
+    }
+
+    pub fn current_range_index(&self) -> usize {
+        self.active_range_index
+    }
+
+    pub fn replay_enabled(&self) -> bool {
+        self.replay_mode
     }
 
     pub(super) fn visible_len(&self) -> f32 {
@@ -124,6 +145,7 @@ impl ChartView {
         self.interval_select_open = false;
         self.symbol_search_open = false;
         self.apply_range_index(self.active_range_index);
+        let _ = self.persist_session("interval", &Self::interval_label(self.interval));
     }
 
     pub(crate) fn replace_data(&mut self, base: Vec<Candle>, source: String) {
@@ -133,6 +155,7 @@ impl ChartView {
         self.source = source;
         self.load_error = None;
         self.loading_symbol = None;
+        let _ = self.persist_session("active_source", &self.source);
     }
 
     pub(super) fn apply_range_index(&mut self, index: usize) {
@@ -172,6 +195,22 @@ impl ChartView {
                 self.view_offset = 0.0;
             }
         }
+        let _ = self.persist_session("range_index", &self.active_range_index.to_string());
+    }
+
+    pub(super) fn set_replay_mode(&mut self, enabled: bool) {
+        self.replay_mode = enabled;
+        let _ = self.persist_session("replay_mode", if enabled { "true" } else { "false" });
+    }
+
+    fn persist_session(&self, key: &str, value: &str) -> Result<(), ()> {
+        if let Some(store) = &self.store {
+            store
+                .borrow_mut()
+                .set_session_value(key, value)
+                .map_err(|_| ())?;
+        }
+        Ok(())
     }
 }
 

@@ -31,7 +31,7 @@ pub fn interval_menu(
         .rounded_md();
 
     for (option, label) in options.iter().cloned() {
-        let is_active = view.interval == option;
+        let is_active = view.current_interval() == option;
         let handler = cx.listener(
             move |this: &mut ChartView, _: &gpui::MouseDownEvent, window, _| {
                 this.apply_interval(option);

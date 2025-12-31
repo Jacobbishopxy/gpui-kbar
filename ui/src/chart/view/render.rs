@@ -88,6 +88,26 @@ fn start_watchlist_load(
         return;
     }
 
+    if let Some(store_rc) = view.store.clone() {
+        let cached = {
+            let store_ref = store_rc.borrow();
+            store_ref
+                .load_candles(symbol, None)
+                .ok()
+                .filter(|c| !c.is_empty())
+        };
+        if let Some(cached) = cached {
+            view.replace_data(cached, symbol.to_string());
+            view.loading_symbol = None;
+            view.load_error = None;
+            let _ = store_rc
+                .borrow_mut()
+                .set_session_value("active_source", symbol);
+            window.refresh();
+            return;
+        }
+    }
+
     view.loading_symbol = Some(symbol.to_string());
     view.load_error = None;
     window.refresh();
@@ -95,6 +115,7 @@ fn start_watchlist_load(
     let entity = cx.entity();
     let path = resolve_watch_path(source);
     let symbol_string = symbol.to_string();
+    let store = view.store.clone();
 
     let task = cx.background_executor().spawn(async move {
         let candles = load_csv(&path, LoadOptions::default())
@@ -117,6 +138,12 @@ fn start_watchlist_load(
                         match result {
                             Ok((symbol, candles)) => {
                                 view.load_error = None;
+                                if let Some(store) = store.as_ref() {
+                                    let _ = store.borrow_mut().write_candles(&symbol, &candles);
+                                    let _ = store
+                                        .borrow_mut()
+                                        .set_session_value("active_source", &symbol);
+                                }
                                 view.replace_data(candles, symbol.clone());
                                 cx.notify();
                             }
@@ -133,8 +160,12 @@ fn start_watchlist_load(
 }
 impl Render for ChartView {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        let interval_label = ChartView::interval_label(self.interval);
-        let playback_label = SharedString::from(if self.replay_mode { "Replay" } else { "Live" });
+        let interval_label = ChartView::interval_label(self.current_interval());
+        let playback_label = SharedString::from(if self.replay_enabled() {
+            "Replay"
+        } else {
+            "Live"
+        });
         let timezone_label = SharedString::from(
             self.candles
                 .last()
@@ -275,11 +306,12 @@ impl Render for ChartView {
         let (header_controls, search_overlay) = header_controls(self, _cx, interval_trigger);
 
         let toggle_replay = _cx.listener(|this: &mut Self, _: &MouseDownEvent, window, _| {
-            this.replay_mode = !this.replay_mode;
+            let next = !this.replay_enabled();
+            this.set_replay_mode(next);
             window.refresh();
         });
         let replay_chip = {
-            let active = self.replay_mode;
+            let active = self.replay_enabled();
             let bg = if active { rgb(0x1f2937) } else { rgb(0x111827) };
             let border = if active { rgb(0x2563eb) } else { rgb(0x1f2937) };
             let text = if active { rgb(0xffffff) } else { rgb(0xe5e7eb) };
@@ -341,7 +373,7 @@ impl Render for ChartView {
         let header = chart_header(header_left, header_right);
         let mut quick_ranges = div().flex().items_center().gap_2();
         for (idx, (label, _)) in QUICK_RANGE_WINDOWS.iter().enumerate() {
-            let is_active = self.active_range_index == idx;
+            let is_active = self.current_range_index() == idx;
             let handle = _cx.listener(move |this: &mut Self, _: &MouseDownEvent, window, _| {
                 this.apply_range_index(idx);
                 window.refresh();
@@ -355,7 +387,7 @@ impl Render for ChartView {
             interval_label.clone(),
             candle_count,
             range_text.clone(),
-            !self.replay_mode,
+            !self.replay_enabled(),
             playback_label.clone(),
             timezone_label.clone(),
         );
