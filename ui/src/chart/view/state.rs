@@ -36,6 +36,8 @@ pub struct ChartView {
     pub(super) symbol_search_open: bool,
     pub(super) active_range_index: usize,
     pub(super) replay_mode: bool,
+    pub(super) loading_symbol: Option<String>,
+    pub(super) load_error: Option<String>,
 }
 
 impl ChartView {
@@ -67,6 +69,8 @@ impl ChartView {
             symbol_search_open: false,
             active_range_index: QUICK_RANGE_WINDOWS.len().saturating_sub(1),
             replay_mode: false,
+            loading_symbol: None,
+            load_error: None,
         }
     }
 
@@ -127,6 +131,8 @@ impl ChartView {
         let interval = self.interval;
         self.apply_interval(interval);
         self.source = source;
+        self.load_error = None;
+        self.loading_symbol = None;
     }
 
     pub(super) fn apply_range_index(&mut self, index: usize) {

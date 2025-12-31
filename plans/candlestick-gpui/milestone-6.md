@@ -15,6 +15,7 @@ Plan
 - Layout: build GPUI structure with header (symbol search input that can pop a symbol-search frame, frequent selector moved into the header next to search, interval selector, indicator/add buttons), main chart canvas, left drawing toolbar, right sidebar (watchlist plus instrument summary plus trading CTA stub), footer (left-aligned interval buttons: 1D 5D 1M 3M 6M 1Y 5Y ALL, plus playback/timezone readout).
 - State model: central controller for symbol, interval, loaded data, overlays, drawings, viewport (scales/cursor), and panel toggles; pass read-only views into components.
 - Data: reuse loaders/resampler; implement symbol switching and caching; maintain viewport-ready buffers and min/max per window for quick redraws.
+- Persistence: persist session state (watchlist, active symbol/interval/range, replay flags) plus candles/indicator outputs in DuckDB for fast reloads and offline caching.
 - Rendering: layered pipeline (grid -> volume -> candles -> overlays -> drawings -> crosshair/tooltip); add price axis and time axis ticks/labels with cursor badges aligned to edges.
 - Interactions: wheel/trackpad zoom centered on cursor, drag-to-pan, hover crosshair with tooltip, keyboard shortcuts for interval switching and reset view.
 - Drawings: start with trendline, horizontal line, rectangle; gesture state machine (start/drag/commit) with handles for move/delete and inline edit/remove toolbar.
@@ -31,3 +32,12 @@ Status
 - [x] Further refactor: moved header/sidebar layouts and interval menu into dedicated modules to keep render.rs readable.
 - [x] Interval selector menu re-anchored using local positioning so header controls stay aligned when outer layouts (e.g. runtime sidebar, future collapsible panes) shift.
 - [ ] Wire watchlist/symbol switching + data reloads; implement overlays/drawings/interactions polish; snapshot tests/perf passes.
+
+Next up
+
+1) Wire watchlist symbol switching + data reloads (load new CSV, resample, reset range).
+2) Hook interval presets to real keyboard shortcuts and highlight active interval in header.
+3) Make timezone dynamic (system or exchange tz) and surface actual replay state (paused/playing, speed).
+4) Start overlay/drawing scaffolding (MA overlay toggle + basic trendline gestures).
+5) Add a minimal snapshot/render test using sample CSV to guard UI regressions.
+6) Implement DuckDB-backed persistence for state + cached candles/indicator data; reload session on launch.

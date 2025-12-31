@@ -1,6 +1,6 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use core::Interval;
+use core::{Interval, LoadOptions, load_csv};
 use gpui::{
     Context, MouseButton, MouseDownEvent, Render, SharedString, Window, div, prelude::*, px, rgb,
 };
@@ -32,6 +32,105 @@ const INTERVAL_OPTIONS: &[(Option<Interval>, &str)] = &[
     (Some(Interval::Hour(1)), "1h"),
     (Some(Interval::Day(1)), "1d"),
 ];
+
+#[derive(Clone, Copy)]
+struct WatchlistEntry {
+    symbol: &'static str,
+    price: &'static str,
+    change: &'static str,
+    source: &'static str,
+}
+
+const WATCHLIST_ITEMS: &[WatchlistEntry] = &[
+    WatchlistEntry {
+        symbol: "AAPL",
+        price: "273.81",
+        change: "+0.53%",
+        source: "../data/sample.csv",
+    },
+    WatchlistEntry {
+        symbol: "TSLA",
+        price: "485.40",
+        change: "-0.03%",
+        source: "../data/sample.csv",
+    },
+    WatchlistEntry {
+        symbol: "NFLX",
+        price: "93.64",
+        change: "+0.15%",
+        source: "../data/sample.csv",
+    },
+    WatchlistEntry {
+        symbol: "USOIL",
+        price: "58.38",
+        change: "-0.02%",
+        source: "../data/sample.csv",
+    },
+];
+
+fn resolve_watch_path(relative: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join(relative)
+}
+
+fn start_watchlist_load(
+    view: &mut ChartView,
+    cx: &mut Context<ChartView>,
+    window: &mut Window,
+    symbol: &'static str,
+    source: &'static str,
+) {
+    if view.loading_symbol.as_deref() == Some(symbol) {
+        return;
+    }
+
+    let already_active = view.source == symbol;
+    if already_active {
+        return;
+    }
+
+    view.loading_symbol = Some(symbol.to_string());
+    view.load_error = None;
+    window.refresh();
+
+    let entity = cx.entity();
+    let path = resolve_watch_path(source);
+    let symbol_string = symbol.to_string();
+
+    let task = cx.background_executor().spawn(async move {
+        let candles = load_csv(&path, LoadOptions::default())
+            .map_err(|e| format!("failed to load {symbol} from {}: {e}", path.display()))?;
+
+        if candles.is_empty() {
+            Err(format!("no candles loaded for {symbol}"))
+        } else {
+            Ok((symbol_string, candles))
+        }
+    });
+
+    window
+        .spawn(cx, async move |async_cx| {
+            let result = task.await;
+            async_cx
+                .update(|window, app| {
+                    let _ = entity.update(app, |view, cx| {
+                        view.loading_symbol = None;
+                        match result {
+                            Ok((symbol, candles)) => {
+                                view.load_error = None;
+                                view.replace_data(candles, symbol.clone());
+                                cx.notify();
+                            }
+                            Err(msg) => {
+                                view.load_error = Some(msg);
+                            }
+                        }
+                        window.refresh();
+                    });
+                })
+                .ok();
+        })
+        .detach();
+}
 impl Render for ChartView {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         let interval_label = ChartView::interval_label(self.interval);
@@ -278,21 +377,28 @@ impl Render for ChartView {
             left_toolbar = left_toolbar.child(toolbar_button(*item, idx == 0));
         }
 
-        let watchlist_items = [
-            ("AAPL", "273.81", "+0.53%"),
-            ("TSLA", "485.40", "-0.03%"),
-            ("NFLX", "93.64", "+0.15%"),
-            ("USOIL", "58.38", "-0.02%"),
-        ];
         let mut watchlist_list = div().flex().flex_col().gap_2();
-        for (idx, (sym, price, change)) in watchlist_items.iter().enumerate() {
-            let active = idx == 0;
-            let bg = if active { rgb(0x111827) } else { rgb(0x0f172a) };
-            let change_color = if change.starts_with('-') {
+        for item in WATCHLIST_ITEMS.iter() {
+            let is_loading = self.loading_symbol.as_deref() == Some(item.symbol);
+            let active = self.source == item.symbol;
+            let bg = if active || is_loading {
+                rgb(0x111827)
+            } else {
+                rgb(0x0f172a)
+            };
+            let change_color = if item.change.starts_with('-') {
                 rgb(0xef4444)
             } else {
                 rgb(0x22c55e)
             };
+            let symbol_label = if is_loading {
+                format!("{} • loading…", item.symbol)
+            } else {
+                item.symbol.to_string()
+            };
+            let handler = _cx.listener(move |this: &mut Self, _: &MouseDownEvent, window, cx| {
+                start_watchlist_load(this, cx, window, item.symbol, item.source);
+            });
             watchlist_list = watchlist_list.child(
                 div()
                     .px_3()
@@ -304,12 +410,18 @@ impl Render for ChartView {
                     .flex()
                     .items_center()
                     .justify_between()
+                    .on_mouse_down(MouseButton::Left, handler)
                     .child(
                         div()
                             .flex()
                             .items_center()
                             .gap_2()
-                            .child(div().text_sm().text_color(gpui::white()).child(*sym))
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(gpui::white())
+                                    .child(symbol_label),
+                            )
                             .child(
                                 div()
                                     .px_2()
@@ -326,13 +438,13 @@ impl Render for ChartView {
                             .flex()
                             .items_center()
                             .gap_2()
-                            .child(div().text_sm().child(*price))
-                            .child(div().text_xs().text_color(change_color).child(*change)),
+                            .child(div().text_sm().child(item.price))
+                            .child(div().text_xs().text_color(change_color).child(item.change)),
                     ),
             );
         }
 
-        let watchlist_panel = div()
+        let mut watchlist_panel = div()
             .bg(rgb(0x0b1220))
             .border_1()
             .border_color(rgb(0x1f2937))
@@ -359,6 +471,10 @@ impl Render for ChartView {
                     ),
             )
             .child(watchlist_list);
+        if let Some(err) = self.load_error.clone() {
+            watchlist_panel =
+                watchlist_panel.child(div().text_xs().text_color(rgb(0xef4444)).child(err));
+        }
 
         let instrument_card = div()
             .bg(rgb(0x0b1220))
