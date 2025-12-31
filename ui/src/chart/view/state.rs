@@ -35,6 +35,7 @@ pub struct ChartView {
     pub(super) interval_select_open: bool,
     pub(super) symbol_search_open: bool,
     pub(super) active_range_index: usize,
+    pub(super) replay_mode: bool,
 }
 
 impl ChartView {
@@ -65,6 +66,7 @@ impl ChartView {
             interval_select_open: false,
             symbol_search_open: false,
             active_range_index: QUICK_RANGE_WINDOWS.len().saturating_sub(1),
+            replay_mode: false,
         }
     }
 

@@ -35,6 +35,16 @@ const INTERVAL_OPTIONS: &[(Option<Interval>, &str)] = &[
 impl Render for ChartView {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         let interval_label = ChartView::interval_label(self.interval);
+        let playback_label = SharedString::from(if self.replay_mode { "Replay" } else { "Live" });
+        let timezone_label = SharedString::from(
+            self.candles
+                .last()
+                .map(|c| {
+                    let offset = c.timestamp.offset();
+                    format!("UTC{offset}")
+                })
+                .unwrap_or_else(|| "UTC".to_string()),
+        );
         let select_label = interval_label.clone();
         let (start, end) = self.visible_range();
         let visible = if start < end {
@@ -165,6 +175,28 @@ impl Render for ChartView {
 
         let (header_controls, search_overlay) = header_controls(self, _cx, interval_trigger);
 
+        let toggle_replay = _cx.listener(|this: &mut Self, _: &MouseDownEvent, window, _| {
+            this.replay_mode = !this.replay_mode;
+            window.refresh();
+        });
+        let replay_chip = {
+            let active = self.replay_mode;
+            let bg = if active { rgb(0x1f2937) } else { rgb(0x111827) };
+            let border = if active { rgb(0x2563eb) } else { rgb(0x1f2937) };
+            let text = if active { rgb(0xffffff) } else { rgb(0xe5e7eb) };
+            div()
+                .px_3()
+                .py_2()
+                .rounded_md()
+                .bg(bg)
+                .border_1()
+                .border_color(border)
+                .text_sm()
+                .text_color(text)
+                .on_mouse_down(MouseButton::Left, toggle_replay)
+                .child("Replay")
+        };
+
         let header_left = div()
             .flex()
             .items_center()
@@ -173,7 +205,7 @@ impl Render for ChartView {
             .child(header_chip("Indicators"))
             .child(header_chip("Compare"))
             .child(header_chip("Alerts"))
-            .child(header_chip("Replay"));
+            .child(replay_chip);
 
         let header_right = div()
             .flex()
@@ -221,9 +253,12 @@ impl Render for ChartView {
 
         let footer = chart_footer(
             quick_ranges,
-            interval_label,
+            interval_label.clone(),
             candle_count,
             range_text.clone(),
+            !self.replay_mode,
+            playback_label.clone(),
+            timezone_label.clone(),
         );
 
         let toolbar_items = [
@@ -414,7 +449,7 @@ impl Render for ChartView {
             .child(main_column)
             .child(sidebar);
 
-        let mut root = div()
+        let root = div()
             .flex()
             .flex_col()
             .w_full()

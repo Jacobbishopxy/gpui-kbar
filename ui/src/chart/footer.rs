@@ -25,12 +25,17 @@ pub(super) fn chart_footer(
     interval_label: SharedString,
     candle_count: usize,
     range_text: SharedString,
+    live: bool,
+    playback_label: SharedString,
+    timezone_label: SharedString,
 ) -> impl IntoElement {
+    let playback_color = if live { rgb(0x22c55e) } else { rgb(0xf59e0b) };
+
     let playback = div()
         .flex()
         .items_center()
         .gap_2()
-        .child(div().w(px(8.)).h(px(8.)).rounded_full().bg(rgb(0x22c55e)))
+        .child(div().w(px(8.)).h(px(8.)).rounded_full().bg(playback_color))
         .child(
             div()
                 .flex()
@@ -38,7 +43,7 @@ pub(super) fn chart_footer(
                 .gap_2()
                 .text_sm()
                 .text_color(rgb(0xe5e7eb))
-                .child("Live playback")
+                .child(playback_label.clone())
                 .child(
                     div()
                         .text_xs()
@@ -67,7 +72,7 @@ pub(super) fn chart_footer(
         .border_color(rgb(0x1f2937))
         .text_sm()
         .text_color(rgb(0xe5e7eb))
-        .child("UTC");
+        .child(timezone_label);
 
     div()
         .flex()
