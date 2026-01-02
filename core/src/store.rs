@@ -29,13 +29,15 @@ pub enum DataRange {
     },
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct UserSession {
     pub active_source: Option<String>,
     pub interval: Option<String>,
     pub range_index: Option<usize>,
     pub replay_mode: Option<bool>,
     pub watchlist: Vec<String>,
+    pub view_offset: Option<f32>,
+    pub zoom: Option<f32>,
 }
 
 #[derive(Debug, Error)]
@@ -394,6 +396,12 @@ impl DuckDbStore {
             .and_then(|r| r.parse::<usize>().ok());
         let replay_mode = self.get_session_value("replay_mode")?.map(|v| v == "true");
         let watchlist = self.get_watchlist()?;
+        let view_offset = self
+            .get_session_value("view_offset")?
+            .and_then(|v| v.parse::<f32>().ok());
+        let zoom = self
+            .get_session_value("zoom")?
+            .and_then(|v| v.parse::<f32>().ok());
 
         Ok(UserSession {
             active_source,
@@ -401,6 +409,8 @@ impl DuckDbStore {
             range_index,
             replay_mode,
             watchlist,
+            view_offset,
+            zoom,
         })
     }
 }
@@ -615,6 +625,10 @@ mod tests {
             .set_session_value("replay_mode", "true")
             .expect("replay");
         store
+            .set_session_value("view_offset", "5.5")
+            .expect("view_offset");
+        store.set_session_value("zoom", "2.5").expect("zoom");
+        store
             .set_watchlist(&["TSLA".to_string(), "AAPL".to_string()])
             .expect("watchlist");
 
@@ -626,6 +640,18 @@ mod tests {
         assert_eq!(
             session.watchlist,
             vec!["AAPL".to_string(), "TSLA".to_string()]
+        );
+        assert!(
+            session
+                .view_offset
+                .map(|v| (v - 5.5).abs() < f32::EPSILON)
+                .unwrap_or(false)
+        );
+        assert!(
+            session
+                .zoom
+                .map(|v| (v - 2.5).abs() < f32::EPSILON)
+                .unwrap_or(false)
         );
     }
 }

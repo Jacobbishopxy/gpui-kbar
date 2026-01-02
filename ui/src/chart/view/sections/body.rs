@@ -47,6 +47,7 @@ pub fn chart_body(
     let handle_mouse_up = cx.listener(|this: &mut ChartView, _: &MouseUpEvent, window, _| {
         this.dragging = false;
         this.last_drag_position = None;
+        let _ = this.persist_viewport();
         window.refresh();
     });
 

@@ -19,6 +19,7 @@ impl ChartView {
         let new_offset = center - new_visible * 0.5;
         let visible_count = new_visible.round().max(1.0) as usize;
         self.view_offset = self.clamp_offset(new_offset, visible_count);
+        let _ = self.persist_viewport();
         window.refresh();
     }
 

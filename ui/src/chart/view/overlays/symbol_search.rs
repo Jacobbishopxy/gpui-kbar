@@ -42,15 +42,17 @@ pub fn symbol_search_overlay(view: &mut ChartView, cx: &mut Context<ChartView>) 
         );
     }
 
-    let mut entries = view.symbol_universe();
-    if active_filter != "All" {
-        entries.retain(|entry| {
-            entry
-                .filters
-                .iter()
-                .any(|f| f.eq_ignore_ascii_case(&active_filter))
-        });
-    }
+    let filtered: Vec<&_> = view
+        .symbol_universe()
+        .iter()
+        .filter(|entry| {
+            active_filter == "All"
+                || entry
+                    .filters
+                    .iter()
+                    .any(|f| f.eq_ignore_ascii_case(&active_filter))
+        })
+        .collect();
 
     let mut results_list = div()
         .flex()
@@ -63,7 +65,7 @@ pub fn symbol_search_overlay(view: &mut ChartView, cx: &mut Context<ChartView>) 
         .h_full()
         .id("search-results")
         .overflow_y_scroll();
-    if entries.is_empty() {
+    if filtered.is_empty() {
         results_list = results_list.child(
             div()
                 .p_4()
@@ -72,7 +74,7 @@ pub fn symbol_search_overlay(view: &mut ChartView, cx: &mut Context<ChartView>) 
                 .child("No symbols match this filter."),
         );
     }
-    for (idx, entry) in entries.into_iter().enumerate() {
+    for (idx, entry) in filtered.into_iter().enumerate() {
         let active = idx == 0;
         let row_bg = if active { rgb(0x0f172a) } else { rgb(0x0b1220) };
         let border_color = if active { rgb(0x2563eb) } else { rgb(0x1f2937) };

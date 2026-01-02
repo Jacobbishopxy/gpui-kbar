@@ -156,9 +156,9 @@ impl ChartView {
         self.symbol_search_filter = filter.to_string();
     }
 
-    pub fn symbol_universe(&mut self) -> Vec<SymbolSearchEntry> {
+    pub fn symbol_universe(&mut self) -> &[SymbolSearchEntry] {
         self.ensure_symbol_universe();
-        self.universe.clone()
+        &self.universe
     }
 
     pub fn start_symbol_load(
@@ -306,6 +306,16 @@ impl ChartView {
             if let Some(replay) = session.replay_mode {
                 self.set_replay_mode(replay);
             }
+
+            if let Some(zoom) = session.zoom {
+                let max_zoom = self.candles.len().max(1) as f32;
+                self.zoom = zoom.clamp(1.0, max_zoom);
+            }
+
+            if let Some(offset) = session.view_offset {
+                let visible_count = self.visible_len().round().max(1.0) as usize;
+                self.view_offset = self.clamp_offset(offset, visible_count);
+            }
             self.hydrated = true;
         }
     }
@@ -423,6 +433,7 @@ impl ChartView {
         }
         if persist {
             let _ = self.persist_session("range_index", &self.active_range_index.to_string());
+            let _ = self.persist_viewport();
         }
     }
 
@@ -436,6 +447,19 @@ impl ChartView {
             store
                 .borrow_mut()
                 .set_session_value(key, value)
+                .map_err(|_| ())?;
+        }
+        Ok(())
+    }
+
+    pub(super) fn persist_viewport(&self) -> Result<(), ()> {
+        if let Some(store) = &self.store {
+            let store = store.borrow_mut();
+            store
+                .set_session_value("view_offset", &self.view_offset.to_string())
+                .map_err(|_| ())?;
+            store
+                .set_session_value("zoom", &self.zoom.to_string())
                 .map_err(|_| ())?;
         }
         Ok(())
