@@ -45,6 +45,7 @@ impl ChartView {
                 .shadow_lg()
                 .p_2()
                 .text_xs()
+                .text_color(gpui::white())
                 .flex()
                 .flex_col()
                 .gap_1()

@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use duckdb::{Connection, params, params_from_iter};
+use std::collections::HashSet;
 use thiserror::Error;
 use time::{
     OffsetDateTime,
@@ -136,12 +137,18 @@ impl DuckDbStore {
             return Err(StoreError::NoBackend);
         }
 
+        let deduped = dedup_by_timestamp(candles);
+
         for conn in self.connections() {
-            let mut stmt = conn.prepare(
+            // Replace any existing rows for this symbol to avoid duplicates when reloading.
+            let tx = conn.unchecked_transaction()?;
+            tx.execute("DELETE FROM candles WHERE symbol = ?", params![symbol])?;
+
+            let mut stmt = tx.prepare(
                 "INSERT INTO candles (symbol, timestamp, open, high, low, close, volume)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             )?;
-            for candle in candles {
+            for candle in &deduped {
                 let ts = candle.timestamp.format(&Rfc3339)?;
                 stmt.execute(params![
                     symbol,
@@ -153,6 +160,7 @@ impl DuckDbStore {
                     candle.volume
                 ])?;
             }
+            tx.commit()?;
         }
 
         Ok(())
@@ -221,11 +229,11 @@ impl DuckDbStore {
             }
 
             if !result.is_empty() {
-                return Ok(result);
+                return Ok(dedup_by_timestamp(&result));
             }
         }
 
-        Ok(result)
+        Ok(dedup_by_timestamp(&result))
     }
 
     pub fn write_indicator_values(
@@ -404,6 +412,19 @@ fn init_schema(conn: &Connection) -> Result<(), StoreError> {
     Ok(())
 }
 
+fn dedup_by_timestamp(candles: &[Candle]) -> Vec<Candle> {
+    // Keep the last occurrence for any timestamp to favor freshest data.
+    let mut seen = HashSet::new();
+    let mut unique = Vec::with_capacity(candles.len());
+    for candle in candles.iter().rev() {
+        if seen.insert(candle.timestamp) {
+            unique.push(candle.clone());
+        }
+    }
+    unique.reverse();
+    unique
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -535,5 +556,23 @@ mod tests {
             )
             .unwrap();
         assert_eq!(between.len(), 2);
+    }
+
+    #[test]
+    fn writing_same_symbol_replaces_existing_rows() {
+        let store = DuckDbStore::new(temp_path(), StorageMode::Memory).unwrap();
+        let mut candles = sample_candles();
+        let mut newer = candles[0].clone();
+        newer.open = 9.99;
+        candles.push(newer);
+
+        store.write_candles("DUP", &candles).unwrap();
+        store.write_candles("DUP", &candles).unwrap();
+
+        let loaded = store.load_candles("DUP", None).unwrap();
+        // Duplicates for the same timestamp are removed and the newest value wins.
+        assert_eq!(loaded.len(), sample_candles().len());
+        assert_eq!(loaded[0].timestamp, candles[0].timestamp);
+        assert!((loaded[0].open - 9.99).abs() < f64::EPSILON);
     }
 }

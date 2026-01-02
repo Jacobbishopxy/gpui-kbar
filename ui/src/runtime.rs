@@ -135,7 +135,7 @@ impl RuntimeView {
                 .filter(|c| !c.is_empty());
             if let Some(candles) = cached {
                 self.loading = false;
-                self.apply_loaded(path.display().to_string(), candles, window, cx);
+                self.apply_loaded(path.display().to_string(), candles, window, cx, true);
                 return;
             }
         }
@@ -172,7 +172,7 @@ impl RuntimeView {
                             view.loading = false;
                             match result {
                                 Ok((source, candles)) => {
-                                    view.apply_loaded(source, candles, window, cx);
+                                    view.apply_loaded(source, candles, window, cx, true);
                                 }
                                 Err(msg) => {
                                     view.error = Some(msg);
@@ -192,32 +192,34 @@ impl RuntimeView {
         candles: Vec<Candle>,
         window: &mut Window,
         cx: &mut Context<Self>,
+        persist_session: bool,
     ) {
         self.source = Some(source.clone());
         self.error = None;
-        if let Some(store) = &self.store {
-            let _ = store.borrow_mut().write_candles(&source, &candles);
-            let _ = store
-                .borrow_mut()
-                .set_session_value("active_source", &source);
-            let interval = self.chart.update(cx, |chart, _| {
-                ChartView::interval_label(chart.current_interval())
-            });
-            let _ = store
-                .borrow_mut()
-                .set_session_value("interval", interval.as_str());
-            let range = self
-                .chart
-                .update(cx, |chart, _| chart.current_range_index().to_string());
-            let _ = store.borrow_mut().set_session_value("range_index", &range);
-            let replay = self.chart.update(cx, |chart, _| chart.replay_enabled());
-            let _ = store
-                .borrow_mut()
-                .set_session_value("replay_mode", if replay { "true" } else { "false" });
+        if persist_session {
+            if let Some(store) = &self.store {
+                let _ = store.borrow_mut().write_candles(&source, &candles);
+                let _ = store
+                    .borrow_mut()
+                    .set_session_value("active_source", &source);
+                let interval = self.chart.update(cx, |chart, _| {
+                    ChartView::interval_label(chart.current_interval())
+                });
+                let _ = store
+                    .borrow_mut()
+                    .set_session_value("interval", interval.as_str());
+                let range = self
+                    .chart
+                    .update(cx, |chart, _| chart.current_range_index().to_string());
+                let _ = store.borrow_mut().set_session_value("range_index", &range);
+                let replay = self.chart.update(cx, |chart, _| chart.replay_enabled());
+                let _ = store
+                    .borrow_mut()
+                    .set_session_value("replay_mode", if replay { "true" } else { "false" });
+            }
         }
         let _ = self.chart.update(cx, |chart, cx| {
-            chart.replace_data(candles, source);
-            chart.add_to_watchlist(chart.current_source());
+            chart.replace_data(candles, source, persist_session);
             cx.notify();
         });
         window.refresh();
@@ -247,7 +249,9 @@ impl RuntimeView {
         });
 
         if let Some((source, candles)) = cached {
-            self.apply_loaded(source, candles, window, cx);
+            // On restore, avoid overwriting persisted session settings (interval/range)
+            // before the chart hydrates from the store.
+            self.apply_loaded(source, candles, window, cx, false);
         }
     }
 }

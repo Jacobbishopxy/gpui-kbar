@@ -192,11 +192,11 @@ impl ChartView {
                     .map(Some),
                 _ => None,
             }) {
-                self.apply_interval(interval);
+                self.apply_interval(interval, false);
             }
 
             if let Some(idx) = range_idx_str.and_then(|r| r.parse::<usize>().ok()) {
-                self.apply_range_index(idx);
+                self.apply_range_index(idx, false);
             }
 
             if let Some(replay) = replay_str {
@@ -241,7 +241,7 @@ impl ChartView {
         (start, end)
     }
 
-    pub(super) fn apply_interval(&mut self, interval: Option<Interval>) {
+    pub(super) fn apply_interval(&mut self, interval: Option<Interval>, persist: bool) {
         self.interval = interval;
         self.candles = match interval {
             Some(i) => resample(&self.base_candles, i),
@@ -253,22 +253,26 @@ impl ChartView {
         self.hover_position = None;
         self.interval_select_open = false;
         self.symbol_search_open = false;
-        self.apply_range_index(self.active_range_index);
-        let _ = self.persist_session("interval", &Self::interval_label(self.interval));
+        self.apply_range_index(self.active_range_index, persist);
+        if persist {
+            let _ = self.persist_session("interval", &Self::interval_label(self.interval));
+        }
     }
 
-    pub(crate) fn replace_data(&mut self, base: Vec<Candle>, source: String) {
+    pub(crate) fn replace_data(&mut self, base: Vec<Candle>, source: String, persist: bool) {
         self.base_candles = base;
         let interval = self.interval;
-        self.apply_interval(interval);
+        self.apply_interval(interval, persist);
         self.source = source;
         self.load_error = None;
         self.loading_symbol = None;
-        self.add_to_watchlist(self.source.clone());
-        let _ = self.persist_session("active_source", &self.source);
+        if persist {
+            self.add_to_watchlist(self.source.clone());
+            let _ = self.persist_session("active_source", &self.source);
+        }
     }
 
-    pub(super) fn apply_range_index(&mut self, index: usize) {
+    pub(super) fn apply_range_index(&mut self, index: usize, persist: bool) {
         let clamped_index = index.min(QUICK_RANGE_WINDOWS.len().saturating_sub(1));
         self.active_range_index = clamped_index;
         self.interval_select_open = false;
@@ -305,7 +309,9 @@ impl ChartView {
                 self.view_offset = 0.0;
             }
         }
-        let _ = self.persist_session("range_index", &self.active_range_index.to_string());
+        if persist {
+            let _ = self.persist_session("range_index", &self.active_range_index.to_string());
+        }
     }
 
     pub(super) fn set_replay_mode(&mut self, enabled: bool) {

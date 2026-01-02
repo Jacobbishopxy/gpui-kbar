@@ -67,7 +67,7 @@ fn start_watchlist_load(
                 .filter(|c| !c.is_empty())
         };
         if let Some(cached) = cached {
-            view.replace_data(cached, symbol.clone());
+            view.replace_data(cached, symbol.clone(), true);
             view.loading_symbol = None;
             view.load_error = None;
             let _ = store_rc
@@ -114,7 +114,7 @@ fn start_watchlist_load(
                                         .borrow_mut()
                                         .set_session_value("active_source", &symbol);
                                 }
-                                view.replace_data(candles, symbol.clone());
+                                view.replace_data(candles, symbol.clone(), true);
                                 cx.notify();
                             }
                             Err(msg) => {
@@ -345,7 +345,7 @@ impl Render for ChartView {
         for (idx, (label, _)) in QUICK_RANGE_WINDOWS.iter().enumerate() {
             let is_active = self.current_range_index() == idx;
             let handle = _cx.listener(move |this: &mut Self, _: &MouseDownEvent, window, _| {
-                this.apply_range_index(idx);
+                this.apply_range_index(idx, true);
                 window.refresh();
             });
             quick_ranges = quick_ranges
