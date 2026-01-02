@@ -1,6 +1,6 @@
-use std::path::Path;
+use std::{path::Path, sync::Arc};
 
-use core::Interval;
+use core::{Candle, Interval};
 use gpui::{
     Context, MouseButton, MouseDownEvent, Render, SharedString, Window, div, prelude::*, px, rgb,
     svg,
@@ -33,6 +33,7 @@ const INTERVAL_OPTIONS: &[(Option<Interval>, &str)] = &[
     (Some(Interval::Hour(1)), "1h"),
     (Some(Interval::Day(1)), "1d"),
 ];
+
 impl Render for ChartView {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         let interval_label = ChartView::interval_label(self.current_interval());
@@ -86,7 +87,7 @@ impl Render for ChartView {
                 .unwrap_or_else(|_| c.timestamp.to_string())
         });
 
-        let candles = visible.to_vec();
+        let candles: Arc<[Candle]> = Arc::from(visible.to_vec());
         let volume_candles = candles.clone();
         let price_min = self.price_min;
         let price_max = self.price_max;

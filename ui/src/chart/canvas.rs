@@ -1,15 +1,17 @@
+use std::sync::Arc;
+
 use core::Candle;
 use gpui::{
     BorderStyle, Bounds, Canvas, PathBuilder, canvas, point, px, quad, rgb, size, transparent_black,
 };
 
 pub(super) fn chart_canvas(
-    candles: Vec<Candle>,
+    candles: Arc<[Candle]>,
     price_min: f64,
     price_max: f64,
     hover_local: Option<usize>,
     hover_y: Option<f32>,
-) -> Canvas<Vec<Candle>> {
+) -> Canvas<Arc<[Candle]>> {
     canvas(
         move |_, _, _| candles.clone(),
         move |bounds, candles, window, _| {
@@ -113,9 +115,9 @@ pub(super) fn chart_canvas(
 }
 
 pub(super) fn volume_canvas(
-    candles: Vec<Candle>,
+    candles: Arc<[Candle]>,
     hover_local: Option<usize>,
-) -> Canvas<Vec<Candle>> {
+) -> Canvas<Arc<[Candle]>> {
     canvas(
         move |_, _, _| candles.clone(),
         move |bounds, candles, window, _| {
