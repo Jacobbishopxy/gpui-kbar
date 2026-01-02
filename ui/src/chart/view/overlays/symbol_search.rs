@@ -2,6 +2,7 @@ use gpui::{Context, Div, MouseButton, MouseDownEvent, div, prelude::*, px, rgb, 
 
 use crate::chart::view::ChartView;
 use crate::components::close_button::close_button;
+use crate::components::loading_sand::loading_sand;
 
 const POPUP_WIDTH: f32 = 620.0;
 const POPUP_HEIGHT: f32 = 620.0;
@@ -19,6 +20,7 @@ pub fn symbol_search_overlay(view: &mut ChartView, cx: &mut Context<ChartView>) 
     ];
     let active_filter = view.symbol_search_filter().to_string();
     let add_on_select = view.symbol_search_add_to_watchlist;
+    let loading_symbol = view.loading_symbol.clone();
 
     let mut filters = div().flex().items_center().gap_2();
     for label in search_filters.iter() {
@@ -80,6 +82,7 @@ pub fn symbol_search_overlay(view: &mut ChartView, cx: &mut Context<ChartView>) 
         let row_bg = if active { rgb(0x0f172a) } else { rgb(0x0b1220) };
         let border_color = if active { rgb(0x2563eb) } else { rgb(0x1f2937) };
         let symbol = entry.symbol.clone();
+        let is_loading = loading_symbol.as_deref() == Some(&symbol);
         let on_select = cx.listener(
             move |this: &mut ChartView, _: &MouseDownEvent, window, cx| {
                 this.start_symbol_load(symbol.clone(), add_on_select, window, cx);
@@ -94,59 +97,59 @@ pub fn symbol_search_overlay(view: &mut ChartView, cx: &mut Context<ChartView>) 
             .justify_between()
             .bg(row_bg)
             .on_mouse_down(MouseButton::Left, on_select)
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_3()
-                    .child(
-                        div()
-                            .w(px(32.))
-                            .h(px(32.))
-                            .rounded_full()
-                            .bg(rgb(0x1f2937))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .text_sm()
-                            .text_color(gpui::white())
-                            .child(entry.badge.clone()),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_1()
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap_2()
-                                    .child(
-                                        div()
-                                            .text_sm()
-                                            .text_color(gpui::white())
-                                            .child(entry.symbol.clone()),
-                                    )
-                                    .child(
-                                        div()
-                                            .px_2()
-                                            .py_1()
-                                            .rounded_sm()
-                                            .bg(rgb(0x1f2937))
-                                            .text_xs()
-                                            .text_color(rgb(0x9ca3af))
-                                            .child(entry.market.clone()),
-                                    ),
-                            )
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(rgb(0x9ca3af))
-                                    .child(entry.name.clone()),
-                            ),
-                    ),
-            )
+            .child({
+                let mut left = div().flex().items_center().gap_3();
+                if is_loading {
+                    left = left.child(loading_sand(16.0, rgb(0xf59e0b)));
+                }
+                left.child(
+                    div()
+                        .w(px(32.))
+                        .h(px(32.))
+                        .rounded_full()
+                        .bg(rgb(0x1f2937))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .text_sm()
+                        .text_color(gpui::white())
+                        .child(entry.badge.clone()),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .text_color(gpui::white())
+                                        .child(entry.symbol.clone()),
+                                )
+                                .child(
+                                    div()
+                                        .px_2()
+                                        .py_1()
+                                        .rounded_sm()
+                                        .bg(rgb(0x1f2937))
+                                        .text_xs()
+                                        .text_color(rgb(0x9ca3af))
+                                        .child(entry.market.clone()),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(rgb(0x9ca3af))
+                                .child(entry.name.clone()),
+                        ),
+                )
+            })
             .child(
                 div()
                     .flex()

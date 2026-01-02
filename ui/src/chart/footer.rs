@@ -28,7 +28,7 @@ pub(super) fn chart_footer(
     live: bool,
     playback_label: SharedString,
     timezone_label: SharedString,
-) -> impl IntoElement {
+) -> Div {
     let playback_color = if live { rgb(0x22c55e) } else { rgb(0xf59e0b) };
 
     let playback = div()

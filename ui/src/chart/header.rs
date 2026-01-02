@@ -1,7 +1,7 @@
-use gpui::{div, prelude::*, px, rgb};
+use gpui::{Div, div, prelude::*, px, rgb};
 
 /// Shared header wrapper for the chart layout.
-pub(super) fn chart_header(left: impl IntoElement, right: impl IntoElement) -> impl IntoElement {
+pub(super) fn chart_header(left: impl IntoElement, right: impl IntoElement) -> Div {
     div()
         .flex()
         .items_center()
