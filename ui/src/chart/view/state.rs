@@ -1,11 +1,14 @@
-use std::{cell::RefCell, collections::HashMap, path::Path, rc::Rc};
+use std::{cell::RefCell, collections::HashMap, path::{Path, PathBuf}, rc::Rc};
 
-use core::{Candle, Interval, bounds, resample};
-use gpui::{Bounds, Pixels, SharedString};
+use core::{Candle, Interval, LoadOptions, bounds, load_csv, resample};
+use gpui::{Bounds, Context, Pixels, SharedString, Window};
 use time::Duration;
 
 use super::super::ChartMeta;
-use crate::data::symbols::{SymbolMeta, load_symbols};
+use crate::data::{
+    symbols::{SymbolMeta, load_symbols},
+    universe::{SymbolSearchEntry, load_universe},
+};
 use core::DuckDbStore;
 
 pub const QUICK_RANGE_WINDOWS: [(&str, Option<Duration>); 8] = [
@@ -46,6 +49,8 @@ pub struct ChartView {
     pub watchlist: Vec<String>,
     hydrated: bool,
     symbols: HashMap<String, SymbolMeta>,
+    symbol_search_filter: String,
+    universe: Vec<SymbolSearchEntry>,
 }
 
 impl ChartView {
@@ -95,6 +100,8 @@ impl ChartView {
             watchlist: Vec::new(),
             hydrated: false,
             symbols: HashMap::new(),
+            symbol_search_filter: "All".to_string(),
+            universe: Vec::new(),
         }
     }
 
@@ -140,6 +147,109 @@ impl ChartView {
 
     pub fn current_source(&self) -> String {
         self.source.clone()
+    }
+
+    pub fn symbol_search_filter(&self) -> &str {
+        &self.symbol_search_filter
+    }
+
+    pub fn set_symbol_search_filter(&mut self, filter: &str) {
+        self.symbol_search_filter = filter.to_string();
+    }
+
+    pub fn symbol_universe(&mut self) -> Vec<SymbolSearchEntry> {
+        self.ensure_symbol_universe();
+        self.universe.clone()
+    }
+
+    pub fn start_symbol_load(
+        &mut self,
+        symbol: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.ensure_symbol_catalog();
+        if self.loading_symbol.as_deref() == Some(&symbol) {
+            return;
+        }
+        if self.source == symbol {
+            self.symbol_search_open = false;
+            window.refresh();
+            return;
+        }
+
+        let source = self.resolve_symbol_source(&symbol);
+        let resolved = resolve_source_path(&source);
+
+        if let Some(store_rc) = self.store.clone() {
+            let cached = {
+                let store_ref = store_rc.borrow();
+                store_ref
+                    .load_candles(&symbol, None)
+                    .ok()
+                    .filter(|c| !c.is_empty())
+            };
+            if let Some(cached) = cached {
+                self.replace_data(cached, symbol.clone(), true);
+                self.loading_symbol = None;
+                self.load_error = None;
+                self.symbol_search_open = false;
+                let _ = store_rc
+                    .borrow_mut()
+                    .set_session_value("active_source", &symbol);
+                window.refresh();
+                return;
+            }
+        }
+
+        self.loading_symbol = Some(symbol.clone());
+        self.load_error = None;
+        self.symbol_search_open = false;
+        window.refresh();
+
+        let entity = cx.entity();
+        let store = self.store.clone();
+        let task = cx.background_executor().spawn(async move {
+            let candles = load_csv(&resolved, LoadOptions::default()).map_err(|e| {
+                format!("failed to load {symbol} from {}: {e}", resolved.display())
+            })?;
+
+            if candles.is_empty() {
+                Err(format!("no candles loaded for {symbol}"))
+            } else {
+                Ok((symbol, candles))
+            }
+        });
+
+        window
+            .spawn(cx, async move |async_cx| {
+                let result = task.await;
+                async_cx
+                    .update(|window, app| {
+                        let _ = entity.update(app, |view, cx| {
+                            view.loading_symbol = None;
+                            match result {
+                                Ok((symbol, candles)) => {
+                                    view.load_error = None;
+                                    if let Some(store) = store.as_ref() {
+                                        let _ = store.borrow_mut().write_candles(&symbol, &candles);
+                                        let _ = store
+                                            .borrow_mut()
+                                            .set_session_value("active_source", &symbol);
+                                    }
+                                    view.replace_data(candles, symbol.clone(), true);
+                                    cx.notify();
+                                }
+                                Err(msg) => {
+                                    view.load_error = Some(msg);
+                                }
+                            }
+                            window.refresh();
+                        });
+                    })
+                    .ok();
+            })
+            .detach();
     }
 
     pub fn hydrate_from_store(&mut self) {
@@ -328,9 +438,19 @@ impl ChartView {
         if !self.symbols.is_empty() {
             return;
         }
-        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../data/symbols.csv");
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../data/mapping.csv");
         if let Ok(map) = load_symbols(path.to_str().unwrap_or_default()) {
             self.symbols = map;
+        }
+    }
+
+    pub fn ensure_symbol_universe(&mut self) {
+        if !self.universe.is_empty() {
+            return;
+        }
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../data/universe.csv");
+        if let Ok(entries) = load_universe(path.to_str().unwrap_or_default()) {
+            self.universe = entries;
         }
     }
 
@@ -352,4 +472,13 @@ pub fn padded_bounds(candles: &[Candle]) -> (f64, f64) {
     }
     let pad = ((max - min) * 0.01).max(0.0);
     (min - pad, max + pad)
+}
+
+fn resolve_source_path(relative: &str) -> PathBuf {
+    let path = Path::new(relative);
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join(relative)
+    }
 }

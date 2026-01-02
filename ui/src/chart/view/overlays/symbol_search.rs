@@ -10,78 +10,25 @@ pub fn symbol_search_overlay(view: &mut ChartView, cx: &mut Context<ChartView>) 
         return None;
     }
 
+    view.ensure_symbol_universe();
+
     let search_filters = [
         "All", "Stocks", "Funds", "Futures", "Forex", "Crypto", "Indices", "Bonds", "Economy",
         "Options",
     ];
-    let search_results = [
-        ("100", "NDQ", "US 100 Index", "index cfd", "TVC"),
-        ("ETF", "NDQ", "BetaShares NASDAQ 100 ETF", "fund etf", "ASX"),
-        (
-            "ETF",
-            "NDQ",
-            "Invesco QQQ Trust Series I",
-            "fund etf",
-            "TRADEGATE",
-        ),
-        (
-            "ETF",
-            "NDQ",
-            "Invesco QQQ Trust Series I",
-            "fund etf",
-            "BER",
-        ),
-        (
-            "ETF",
-            "NDQ",
-            "Invesco QQQ Trust Series I",
-            "fund etf",
-            "HAM",
-        ),
-        (
-            "100",
-            "NDQM",
-            "NASDAQ 100 Index (NDX)",
-            "index cfd",
-            "FXOpen",
-        ),
-        ("CASH", "NDQ100", "Nasdaq Cash", "index cfd", "Eightcap"),
-        (
-            "CW",
-            "NDQCC",
-            "Cititwarrants 36.2423 NDQ 07-Jun-35 Instal Mini",
-            "warrant",
-            "CHIXAU",
-        ),
-        ("CR", "NDQUSD", "Nasdaq666", "spot crypto", "CRYPTO"),
-        (
-            "3L",
-            "NDQ3L",
-            "SG Issuer SA Exchange Traded Product 2022-03-18",
-            "fund etf",
-            "Euronext Paris",
-        ),
-        (
-            "3S",
-            "NDQ3S",
-            "SG Issuer SA War 2022- Without fixed mat on ...",
-            "fund etf",
-            "Euronext Paris",
-        ),
-        (
-            "USD",
-            "NDQUSD",
-            "US Tech (NDQ) / US Dollar",
-            "index cfd",
-            "easyMarkets",
-        ),
-    ];
+    let active_filter = view.symbol_search_filter().to_string();
 
     let mut filters = div().flex().items_center().gap_2();
-    for (idx, label) in search_filters.iter().enumerate() {
-        let active = idx == 0;
+    for label in search_filters.iter() {
+        let active = *label == active_filter;
         let bg = if active { rgb(0x1f2937) } else { rgb(0x111827) };
         let text = if active { rgb(0xffffff) } else { rgb(0x9ca3af) };
+        let filter_label = label.to_string();
+        let set_filter =
+            cx.listener(move |this: &mut ChartView, _: &MouseDownEvent, window, _| {
+                this.set_symbol_search_filter(&filter_label);
+                window.refresh();
+            });
         filters = filters.child(
             div()
                 .px_2()
@@ -90,8 +37,19 @@ pub fn symbol_search_overlay(view: &mut ChartView, cx: &mut Context<ChartView>) 
                 .bg(bg)
                 .text_xs()
                 .text_color(text)
+                .on_mouse_down(MouseButton::Left, set_filter)
                 .child(*label),
         );
+    }
+
+    let mut entries = view.symbol_universe();
+    if active_filter != "All" {
+        entries.retain(|entry| {
+            entry
+                .filters
+                .iter()
+                .any(|f| f.eq_ignore_ascii_case(&active_filter))
+        });
     }
 
     let mut results_list = div()
@@ -105,13 +63,23 @@ pub fn symbol_search_overlay(view: &mut ChartView, cx: &mut Context<ChartView>) 
         .h_full()
         .id("search-results")
         .overflow_y_scroll();
-    for (idx, (badge, symbol, name, market, venue)) in search_results.iter().enumerate() {
+    if entries.is_empty() {
+        results_list = results_list.child(
+            div()
+                .p_4()
+                .text_sm()
+                .text_color(rgb(0x9ca3af))
+                .child("No symbols match this filter."),
+        );
+    }
+    for (idx, entry) in entries.into_iter().enumerate() {
         let active = idx == 0;
         let row_bg = if active { rgb(0x0f172a) } else { rgb(0x0b1220) };
         let border_color = if active { rgb(0x2563eb) } else { rgb(0x1f2937) };
-        let close_row = cx.listener(|this: &mut ChartView, _: &MouseDownEvent, window, _| {
-            this.symbol_search_open = false;
-            window.refresh();
+        let symbol = entry.symbol.clone();
+        let on_select = cx.listener(move |this: &mut ChartView, _: &MouseDownEvent, window, cx| {
+            this.start_symbol_load(symbol.clone(), window, cx);
+            this.add_to_watchlist(symbol.clone());
         });
 
         let mut row = div()
@@ -121,7 +89,7 @@ pub fn symbol_search_overlay(view: &mut ChartView, cx: &mut Context<ChartView>) 
             .items_center()
             .justify_between()
             .bg(row_bg)
-            .on_mouse_down(MouseButton::Left, close_row)
+            .on_mouse_down(MouseButton::Left, on_select)
             .child(
                 div()
                     .flex()
@@ -138,7 +106,7 @@ pub fn symbol_search_overlay(view: &mut ChartView, cx: &mut Context<ChartView>) 
                             .justify_center()
                             .text_sm()
                             .text_color(gpui::white())
-                            .child(*badge),
+                            .child(entry.badge.clone()),
                     )
                     .child(
                         div()
@@ -150,7 +118,12 @@ pub fn symbol_search_overlay(view: &mut ChartView, cx: &mut Context<ChartView>) 
                                     .flex()
                                     .items_center()
                                     .gap_2()
-                                    .child(div().text_sm().text_color(gpui::white()).child(*symbol))
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .text_color(gpui::white())
+                                            .child(entry.symbol.clone()),
+                                    )
                                     .child(
                                         div()
                                             .px_2()
@@ -159,10 +132,15 @@ pub fn symbol_search_overlay(view: &mut ChartView, cx: &mut Context<ChartView>) 
                                             .bg(rgb(0x1f2937))
                                             .text_xs()
                                             .text_color(rgb(0x9ca3af))
-                                            .child(*market),
+                                            .child(entry.market.clone()),
                                     ),
                             )
-                            .child(div().text_xs().text_color(rgb(0x9ca3af)).child(*name)),
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(rgb(0x9ca3af))
+                                    .child(entry.name.clone()),
+                            ),
                     ),
             )
             .child(
@@ -172,7 +150,7 @@ pub fn symbol_search_overlay(view: &mut ChartView, cx: &mut Context<ChartView>) 
                     .gap_2()
                     .text_xs()
                     .text_color(rgb(0x9ca3af))
-                    .child(*market)
+                    .child(entry.market.clone())
                     .child(
                         div()
                             .px_2()
@@ -181,7 +159,7 @@ pub fn symbol_search_overlay(view: &mut ChartView, cx: &mut Context<ChartView>) 
                             .bg(rgb(0x1f2937))
                             .text_xs()
                             .text_color(gpui::white())
-                            .child(*venue),
+                            .child(entry.venue.clone()),
                     ),
             );
 

@@ -1,6 +1,6 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use core::{Interval, LoadOptions, load_csv};
+use core::Interval;
 use gpui::{
     Context, MouseButton, MouseDownEvent, Render, SharedString, Window, div, prelude::*, px, rgb,
 };
@@ -32,102 +32,6 @@ const INTERVAL_OPTIONS: &[(Option<Interval>, &str)] = &[
     (Some(Interval::Hour(1)), "1h"),
     (Some(Interval::Day(1)), "1d"),
 ];
-
-fn resolve_watch_path(relative: &str) -> PathBuf {
-    let path = Path::new(relative);
-    if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        Path::new(env!("CARGO_MANIFEST_DIR")).join(relative)
-    }
-}
-
-fn start_watchlist_load(
-    view: &mut ChartView,
-    cx: &mut Context<ChartView>,
-    window: &mut Window,
-    symbol: String,
-    source: String,
-) {
-    if view.loading_symbol.as_deref() == Some(&symbol) {
-        return;
-    }
-
-    let already_active = view.source == symbol;
-    if already_active {
-        return;
-    }
-
-    if let Some(store_rc) = view.store.clone() {
-        let cached = {
-            let store_ref = store_rc.borrow();
-            store_ref
-                .load_candles(&symbol, None)
-                .ok()
-                .filter(|c| !c.is_empty())
-        };
-        if let Some(cached) = cached {
-            view.replace_data(cached, symbol.clone(), true);
-            view.loading_symbol = None;
-            view.load_error = None;
-            let _ = store_rc
-                .borrow_mut()
-                .set_session_value("active_source", &symbol);
-            window.refresh();
-            return;
-        }
-    }
-
-    view.loading_symbol = Some(symbol.clone());
-    view.load_error = None;
-    window.refresh();
-
-    let entity = cx.entity();
-    let path = resolve_watch_path(&source);
-    let symbol_string = symbol.clone();
-    let store = view.store.clone();
-
-    let task = cx.background_executor().spawn(async move {
-        let candles = load_csv(&path, LoadOptions::default())
-            .map_err(|e| format!("failed to load {symbol} from {}: {e}", path.display()))?;
-
-        if candles.is_empty() {
-            Err(format!("no candles loaded for {symbol}"))
-        } else {
-            Ok((symbol_string, candles))
-        }
-    });
-
-    window
-        .spawn(cx, async move |async_cx| {
-            let result = task.await;
-            async_cx
-                .update(|window, app| {
-                    let _ = entity.update(app, |view, cx| {
-                        view.loading_symbol = None;
-                        match result {
-                            Ok((symbol, candles)) => {
-                                view.load_error = None;
-                                if let Some(store) = store.as_ref() {
-                                    let _ = store.borrow_mut().write_candles(&symbol, &candles);
-                                    let _ = store
-                                        .borrow_mut()
-                                        .set_session_value("active_source", &symbol);
-                                }
-                                view.replace_data(candles, symbol.clone(), true);
-                                cx.notify();
-                            }
-                            Err(msg) => {
-                                view.load_error = Some(msg);
-                            }
-                        }
-                        window.refresh();
-                    });
-                })
-                .ok();
-        })
-        .detach();
-}
 impl Render for ChartView {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         let interval_label = ChartView::interval_label(self.current_interval());
@@ -412,8 +316,7 @@ impl Render for ChartView {
             let symbol_for_load = symbol.clone();
             let symbol_for_remove = symbol.clone();
             let handler = _cx.listener(move |this: &mut Self, _: &MouseDownEvent, window, cx| {
-                let source = this.resolve_symbol_source(&symbol_for_load);
-                start_watchlist_load(this, cx, window, symbol_for_load.clone(), source);
+                this.start_symbol_load(symbol_for_load.clone(), window, cx);
                 this.add_to_watchlist(symbol_for_load.clone());
             });
             let remove_handler =

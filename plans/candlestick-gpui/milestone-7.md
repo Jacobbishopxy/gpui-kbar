@@ -26,3 +26,4 @@ Status
 - [ ] DuckDB-backed cache persists streamed data and hydrates on startup.
 - [ ] Unified loader merges cache + live stream and feeds the UI/resampler.
 - [ ] Harness/demo publishes FlatBuffers over ZMQ and verifies DuckDB round-trip.
+- [x] Local symbol search now hydrates from `data/universe.csv` + `mapping.csv`, with per-symbol candle generation via `scripts/generate_kbar.py`.
