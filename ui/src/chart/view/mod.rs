@@ -11,4 +11,4 @@ pub use state::{ChartView, padded_bounds};
 pub const SIDEBAR_WIDTH: f32 = 320.0;
 pub const TOOLBAR_WIDTH: f32 = 56.0;
 pub const OVERLAY_GAP: f32 = 8.0;
-pub const INTERVAL_TRIGGER_WIDTH: f32 = 128.0;
+pub const INTERVAL_TRIGGER_WIDTH: f32 = 64.0;

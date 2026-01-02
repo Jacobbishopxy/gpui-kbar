@@ -1,4 +1,6 @@
-use gpui::{Bounds, Context, Div, MouseButton, MouseDownEvent, div, prelude::*, px, rgb};
+use std::path::Path;
+
+use gpui::{Bounds, Context, Div, MouseButton, MouseDownEvent, div, prelude::*, px, rgb, svg};
 
 use crate::chart::view::{ChartView, overlays::symbol_search::symbol_search_overlay};
 
@@ -18,13 +20,30 @@ pub fn header_controls(
             window.refresh();
         });
 
+    let search_label = if view.candles.is_empty() {
+        "Search symbols".to_string()
+    } else {
+        Path::new(&view.source)
+            .file_name()
+            .and_then(|s| s.to_str())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| view.source.as_str())
+            .to_string()
+    };
+
+    let search_icon = svg()
+        .path("search.svg")
+        .w(px(16.))
+        .h(px(16.))
+        .text_color(rgb(0x9ca3af));
+
     let search_input = div()
         .flex()
         .items_center()
         .gap_2()
         .px_3()
         .py_2()
-        .w(px(220.))
+        .w(px(120.))
         .rounded_md()
         .border_1()
         .border_color(rgb(0x1f2937))
@@ -32,7 +51,8 @@ pub fn header_controls(
         .text_sm()
         .text_color(rgb(0x9ca3af))
         .on_mouse_down(MouseButton::Left, toggle_symbol_search)
-        .child(div().text_color(gpui::white()).child("Search symbols"));
+        .child(search_icon)
+        .child(div().text_color(gpui::white()).child(search_label));
 
     let track_header_controls = cx.processor(
         |this: &mut ChartView, bounds: Vec<Bounds<gpui::Pixels>>, _, _| {

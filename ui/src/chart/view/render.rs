@@ -17,8 +17,9 @@ use super::sections::body::chart_body;
 use super::sections::header::header_controls;
 use super::sections::sidebar::sidebar;
 use super::state::QUICK_RANGE_WINDOWS;
-use super::widgets::{header_chip, stat_row, toolbar_button};
+use super::widgets::{header_chip, header_icon, stat_row, toolbar_button};
 use super::{ChartView, INTERVAL_TRIGGER_WIDTH, TOOLBAR_WIDTH, padded_bounds};
+use crate::components::loading_sand::loading_sand;
 use crate::components::remove_button::remove_button;
 
 const INTERVAL_OPTIONS: &[(Option<Interval>, &str)] = &[
@@ -210,9 +211,9 @@ impl Render for ChartView {
             .items_center()
             .gap_3()
             .child(header_controls)
-            .child(header_chip("Indicators"))
-            .child(header_chip("Compare"))
-            .child(header_chip("Alerts"))
+            .child(header_icon("chart-create.svg", "Indicators"))
+            .child(header_icon("compare.svg", "Compare"))
+            .child(header_icon("alarm-clock.svg", "Alerts"))
             .child(replay_chip);
 
         let header_right = div()
@@ -533,11 +534,11 @@ fn build_watchlist_list(view: &mut ChartView, cx: &mut Context<ChartView>) -> Di
                 window.refresh();
             },
         );
-        let left = div()
-            .flex()
-            .items_center()
-            .gap_2()
-            .min_w(px(0.))
+        let mut left = div().flex().items_center().gap_2().min_w(px(0.));
+        if is_loading {
+            left = left.child(loading_sand(18.0, rgb(0xf59e0b)));
+        }
+        left = left
             .child(
                 div()
                     .text_sm()

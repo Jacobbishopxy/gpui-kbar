@@ -3,8 +3,8 @@ use gpui::{Context, Div, MouseButton, MouseDownEvent, div, prelude::*, px, rgb, 
 use crate::chart::view::ChartView;
 use crate::components::close_button::close_button;
 
-const POPUP_WIDTH: f32 = 920.0;
-const POPUP_HEIGHT: f32 = 630.0;
+const POPUP_WIDTH: f32 = 620.0;
+const POPUP_HEIGHT: f32 = 620.0;
 
 pub fn symbol_search_overlay(view: &mut ChartView, cx: &mut Context<ChartView>) -> Option<Div> {
     if !view.symbol_search_open {
