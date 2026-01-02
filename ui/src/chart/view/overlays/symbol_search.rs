@@ -17,6 +17,7 @@ pub fn symbol_search_overlay(view: &mut ChartView, cx: &mut Context<ChartView>) 
         "Options",
     ];
     let active_filter = view.symbol_search_filter().to_string();
+    let add_on_select = view.symbol_search_add_to_watchlist;
 
     let mut filters = div().flex().items_center().gap_2();
     for label in search_filters.iter() {
@@ -24,11 +25,10 @@ pub fn symbol_search_overlay(view: &mut ChartView, cx: &mut Context<ChartView>) 
         let bg = if active { rgb(0x1f2937) } else { rgb(0x111827) };
         let text = if active { rgb(0xffffff) } else { rgb(0x9ca3af) };
         let filter_label = label.to_string();
-        let set_filter =
-            cx.listener(move |this: &mut ChartView, _: &MouseDownEvent, window, _| {
-                this.set_symbol_search_filter(&filter_label);
-                window.refresh();
-            });
+        let set_filter = cx.listener(move |this: &mut ChartView, _: &MouseDownEvent, window, _| {
+            this.set_symbol_search_filter(&filter_label);
+            window.refresh();
+        });
         filters = filters.child(
             div()
                 .px_2()
@@ -77,10 +77,11 @@ pub fn symbol_search_overlay(view: &mut ChartView, cx: &mut Context<ChartView>) 
         let row_bg = if active { rgb(0x0f172a) } else { rgb(0x0b1220) };
         let border_color = if active { rgb(0x2563eb) } else { rgb(0x1f2937) };
         let symbol = entry.symbol.clone();
-        let on_select = cx.listener(move |this: &mut ChartView, _: &MouseDownEvent, window, cx| {
-            this.start_symbol_load(symbol.clone(), window, cx);
-            this.add_to_watchlist(symbol.clone());
-        });
+        let on_select = cx.listener(
+            move |this: &mut ChartView, _: &MouseDownEvent, window, cx| {
+                this.start_symbol_load(symbol.clone(), add_on_select, window, cx);
+            },
+        );
 
         let mut row = div()
             .px_3()

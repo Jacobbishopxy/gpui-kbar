@@ -335,8 +335,7 @@ impl Render for ChartView {
                 let symbol_for_remove = symbol.clone();
                 let handler =
                     _cx.listener(move |this: &mut Self, _: &MouseDownEvent, window, cx| {
-                        this.start_symbol_load(symbol_for_load.clone(), window, cx);
-                        this.add_to_watchlist(symbol_for_load.clone());
+                        this.start_symbol_load(symbol_for_load.clone(), true, window, cx);
                     });
                 let remove_handler =
                     _cx.listener(move |this: &mut Self, _: &MouseDownEvent, window, cx| {
@@ -413,6 +412,15 @@ impl Render for ChartView {
             }
         }
 
+        let open_watchlist_search =
+            _cx.listener(|this: &mut Self, _: &MouseDownEvent, window, _| {
+                let should_close = this.symbol_search_open && this.symbol_search_add_to_watchlist;
+                this.symbol_search_add_to_watchlist = true;
+                this.symbol_search_open = !should_close;
+                this.interval_select_open = false;
+                window.refresh();
+            });
+
         let mut watchlist_panel = div()
             .bg(rgb(0x0b1220))
             .border_1()
@@ -437,6 +445,7 @@ impl Render for ChartView {
                             .bg(rgb(0x111827))
                             .text_xs()
                             .text_color(rgb(0x9ca3af))
+                            .on_mouse_down(MouseButton::Left, open_watchlist_search)
                             .child("+ Add"),
                     ),
             )

@@ -1,4 +1,9 @@
-use std::{cell::RefCell, collections::HashMap, path::{Path, PathBuf}, rc::Rc};
+use std::{
+    cell::RefCell,
+    collections::HashMap,
+    path::{Path, PathBuf},
+    rc::Rc,
+};
 
 use core::{Candle, Interval, LoadOptions, bounds, load_csv, resample};
 use gpui::{Bounds, Context, Pixels, SharedString, Window};
@@ -41,6 +46,7 @@ pub struct ChartView {
     pub(super) hover_position: Option<(f32, f32)>,
     pub(super) interval_select_open: bool,
     pub(super) symbol_search_open: bool,
+    pub(super) symbol_search_add_to_watchlist: bool,
     active_range_index: usize,
     replay_mode: bool,
     pub loading_symbol: Option<String>,
@@ -84,6 +90,7 @@ impl ChartView {
             hover_position: None,
             interval_select_open: false,
             symbol_search_open: false,
+            symbol_search_add_to_watchlist: false,
             active_range_index: QUICK_RANGE_WINDOWS.len().saturating_sub(1),
             replay_mode: false,
             loading_symbol: None,
@@ -157,6 +164,7 @@ impl ChartView {
     pub fn start_symbol_load(
         &mut self,
         symbol: String,
+        add_to_watchlist: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -182,7 +190,7 @@ impl ChartView {
                     .filter(|c| !c.is_empty())
             };
             if let Some(cached) = cached {
-                self.replace_data(cached, symbol.clone(), true);
+                self.replace_data(cached, symbol.clone(), true, add_to_watchlist);
                 self.loading_symbol = None;
                 self.load_error = None;
                 self.symbol_search_open = false;
@@ -202,9 +210,8 @@ impl ChartView {
         let entity = cx.entity();
         let store = self.store.clone();
         let task = cx.background_executor().spawn(async move {
-            let candles = load_csv(&resolved, LoadOptions::default()).map_err(|e| {
-                format!("failed to load {symbol} from {}: {e}", resolved.display())
-            })?;
+            let candles = load_csv(&resolved, LoadOptions::default())
+                .map_err(|e| format!("failed to load {symbol} from {}: {e}", resolved.display()))?;
 
             if candles.is_empty() {
                 Err(format!("no candles loaded for {symbol}"))
@@ -229,7 +236,12 @@ impl ChartView {
                                             .borrow_mut()
                                             .set_session_value("active_source", &symbol);
                                     }
-                                    view.replace_data(candles, symbol.clone(), true);
+                                    view.replace_data(
+                                        candles,
+                                        symbol.clone(),
+                                        true,
+                                        add_to_watchlist,
+                                    );
                                     cx.notify();
                                 }
                                 Err(msg) => {
@@ -249,41 +261,41 @@ impl ChartView {
             return;
         }
         if let Some(store_rc) = self.store.clone() {
-            let session = store_rc
-                .borrow()
-                .load_user_session()
-                .unwrap_or_default();
+            let session = store_rc.borrow().load_user_session().unwrap_or_default();
 
             self.watchlist = session.watchlist;
 
-            if let Some(interval) = session.interval.and_then(|interval| match interval.as_str() {
-                "raw" => Some(None),
-                s if s.ends_with('s') => s
-                    .trim_end_matches('s')
-                    .parse()
-                    .ok()
-                    .map(Interval::Second)
-                    .map(Some),
-                s if s.ends_with('m') => s
-                    .trim_end_matches('m')
-                    .parse()
-                    .ok()
-                    .map(Interval::Minute)
-                    .map(Some),
-                s if s.ends_with('h') => s
-                    .trim_end_matches('h')
-                    .parse()
-                    .ok()
-                    .map(Interval::Hour)
-                    .map(Some),
-                s if s.ends_with('d') => s
-                    .trim_end_matches('d')
-                    .parse()
-                    .ok()
-                    .map(Interval::Day)
-                    .map(Some),
-                _ => None,
-            }) {
+            if let Some(interval) = session
+                .interval
+                .and_then(|interval| match interval.as_str() {
+                    "raw" => Some(None),
+                    s if s.ends_with('s') => s
+                        .trim_end_matches('s')
+                        .parse()
+                        .ok()
+                        .map(Interval::Second)
+                        .map(Some),
+                    s if s.ends_with('m') => s
+                        .trim_end_matches('m')
+                        .parse()
+                        .ok()
+                        .map(Interval::Minute)
+                        .map(Some),
+                    s if s.ends_with('h') => s
+                        .trim_end_matches('h')
+                        .parse()
+                        .ok()
+                        .map(Interval::Hour)
+                        .map(Some),
+                    s if s.ends_with('d') => s
+                        .trim_end_matches('d')
+                        .parse()
+                        .ok()
+                        .map(Interval::Day)
+                        .map(Some),
+                    _ => None,
+                })
+            {
                 self.apply_interval(interval, false);
             }
 
@@ -351,15 +363,23 @@ impl ChartView {
         }
     }
 
-    pub(crate) fn replace_data(&mut self, base: Vec<Candle>, source: String, persist: bool) {
+    pub(crate) fn replace_data(
+        &mut self,
+        base: Vec<Candle>,
+        source: String,
+        persist_session: bool,
+        add_to_watchlist: bool,
+    ) {
         self.base_candles = base;
         let interval = self.interval;
-        self.apply_interval(interval, persist);
+        self.apply_interval(interval, persist_session);
         self.source = source;
         self.load_error = None;
         self.loading_symbol = None;
-        if persist {
+        if add_to_watchlist {
             self.add_to_watchlist(self.source.clone());
+        }
+        if persist_session {
             let _ = self.persist_session("active_source", &self.source);
         }
     }

@@ -1,6 +1,6 @@
+use crate::application_with_assets;
 use core::{Candle, Interval};
 use gpui::{App, Bounds, WindowBounds, WindowOptions, prelude::*, px, size};
-use crate::application_with_assets;
 
 mod canvas;
 mod error_view;

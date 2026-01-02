@@ -10,7 +10,3 @@ gpui.workspace = true
 clap.workspace = true
 anyhow.workspace = true
 time.workspace = true
-
-[[bin]]
-name = "runtime"
-path = "src/runtime.rs"

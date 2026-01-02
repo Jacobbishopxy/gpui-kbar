@@ -1,5 +1,8 @@
 use core::Candle;
-use gpui::{App, Bounds, Context, Render, Window, WindowBounds, WindowOptions, div, prelude::*, px, rgb, size};
+use gpui::{
+    App, Bounds, Context, Render, Window, WindowBounds, WindowOptions, div, prelude::*, px, rgb,
+    size,
+};
 use std::{cell::RefCell, rc::Rc};
 
 use crate::store::default_store;
@@ -81,7 +84,7 @@ impl RuntimeView {
             }
         }
         let _ = self.chart.update(cx, |chart, cx| {
-            chart.replace_data(candles, source, persist_session);
+            chart.replace_data(candles, source, persist_session, persist_session);
             cx.notify();
         });
         window.refresh();
@@ -98,17 +101,14 @@ impl RuntimeView {
 
         let session = store.borrow().load_user_session().ok();
         let cached = session.as_ref().and_then(|session| {
-            session
-                .active_source
-                .as_deref()
-                .and_then(|source| {
-                    store
-                        .borrow()
-                        .load_candles(source, None)
-                        .ok()
-                        .filter(|c| !c.is_empty())
-                        .map(|candles| (source.to_string(), candles))
-                })
+            session.active_source.as_deref().and_then(|source| {
+                store
+                    .borrow()
+                    .load_candles(source, None)
+                    .ok()
+                    .filter(|c| !c.is_empty())
+                    .map(|candles| (source.to_string(), candles))
+            })
         });
 
         if let Some((source, candles)) = cached {

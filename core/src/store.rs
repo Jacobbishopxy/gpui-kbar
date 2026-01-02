@@ -392,9 +392,7 @@ impl DuckDbStore {
         let range_index = self
             .get_session_value("range_index")?
             .and_then(|r| r.parse::<usize>().ok());
-        let replay_mode = self
-            .get_session_value("replay_mode")?
-            .map(|v| v == "true");
+        let replay_mode = self.get_session_value("replay_mode")?.map(|v| v == "true");
         let watchlist = self.get_watchlist()?;
 
         Ok(UserSession {
@@ -611,12 +609,8 @@ mod tests {
         store
             .set_session_value("active_source", "AAPL")
             .expect("active source");
-        store
-            .set_session_value("interval", "5m")
-            .expect("interval");
-        store
-            .set_session_value("range_index", "3")
-            .expect("range");
+        store.set_session_value("interval", "5m").expect("interval");
+        store.set_session_value("range_index", "3").expect("range");
         store
             .set_session_value("replay_mode", "true")
             .expect("replay");
@@ -629,6 +623,9 @@ mod tests {
         assert_eq!(session.interval.as_deref(), Some("5m"));
         assert_eq!(session.range_index, Some(3));
         assert_eq!(session.replay_mode, Some(true));
-        assert_eq!(session.watchlist, vec!["AAPL".to_string(), "TSLA".to_string()]);
+        assert_eq!(
+            session.watchlist,
+            vec!["AAPL".to_string(), "TSLA".to_string()]
+        );
     }
 }

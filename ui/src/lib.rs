@@ -1,5 +1,5 @@
-mod chart;
 mod assets;
+mod chart;
 mod runtime;
 
 pub use chart::{ChartMeta, ChartView, launch_chart};
