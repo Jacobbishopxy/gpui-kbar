@@ -1,6 +1,7 @@
 use gpui::{Context, Div, MouseButton, MouseDownEvent, div, prelude::*, px, rgb, rgba};
 
 use crate::chart::view::ChartView;
+use crate::components::close_button::close_button;
 
 const POPUP_WIDTH: f32 = 920.0;
 const POPUP_HEIGHT: f32 = 630.0;
@@ -223,20 +224,7 @@ pub fn symbol_search_overlay(view: &mut ChartView, cx: &mut Context<ChartView>) 
                                             .text_color(gpui::white())
                                             .child("Symbol Search"),
                                     )
-                                    .child(
-                                        div()
-                                            .w(px(24.))
-                                            .h(px(24.))
-                                            .rounded_full()
-                                            .bg(rgb(0x1f2937))
-                                            .flex()
-                                            .items_center()
-                                            .justify_center()
-                                            .text_xs()
-                                            .text_color(gpui::white())
-                                            .on_mouse_down(MouseButton::Left, close_overlay)
-                                            .child("X"),
-                                    ),
+                                    .child(close_button(close_overlay)),
                             )
                             .child(
                                 div()

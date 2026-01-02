@@ -3,7 +3,7 @@ use std::{path::Path, sync::Arc};
 use core::{Candle, Interval};
 use gpui::{
     Context, Div, MouseButton, MouseDownEvent, Render, SharedString, Window, div, prelude::*, px,
-    rgb, svg,
+    rgb,
 };
 use time::macros::format_description;
 
@@ -19,6 +19,7 @@ use super::sections::sidebar::sidebar;
 use super::state::QUICK_RANGE_WINDOWS;
 use super::widgets::{header_chip, stat_row, toolbar_button};
 use super::{ChartView, INTERVAL_TRIGGER_WIDTH, TOOLBAR_WIDTH, padded_bounds};
+use crate::components::remove_button::remove_button;
 
 const INTERVAL_OPTIONS: &[(Option<Interval>, &str)] = &[
     (None, "raw"),
@@ -554,18 +555,7 @@ fn build_watchlist_list(view: &mut ChartView, cx: &mut Context<ChartView>) -> Di
                     .text_color(rgb(0x9ca3af))
                     .child(exchange),
             );
-        let remove_button = div()
-            .flex()
-            .items_center()
-            .justify_center()
-            .on_mouse_down(MouseButton::Left, remove_handler)
-            .child(
-                svg()
-                    .path("cross-circle.svg")
-                    .w(px(24.))
-                    .h(px(24.))
-                    .text_color(rgb(0x9ca3af)),
-            );
+        let remove_button = remove_button(remove_handler);
         let right = div()
             .flex()
             .items_center()
