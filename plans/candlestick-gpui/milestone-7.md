@@ -18,6 +18,7 @@ Plan
 - Introduce a DuckDB store: DDL for candles/trades; append-only ingestion; periodic checkpoints/compaction; queries to hydrate memory on start and to backfill gaps.
 - Provide a unified loader API: start from DuckDB cache if present, then stream from ZMQ and write through to DuckDB; support resume from the last persisted cursor/sequence.
 - Add a test/demo harness: a publisher that replays sample CSV via ZMQ using FlatBuffers; an integration test that covers decode -> ingest -> DuckDB persistence and reload.
+- Polish watchlist panel UI (scroll container with max size, ellipsis overflow, consistent controls, updated close icon).
 
 Status
 
@@ -26,4 +27,5 @@ Status
 - [ ] DuckDB-backed cache persists streamed data and hydrates on startup.
 - [ ] Unified loader merges cache + live stream and feeds the UI/resampler.
 - [ ] Harness/demo publishes FlatBuffers over ZMQ and verifies DuckDB round-trip.
+- [ ] Watchlist panel UI polish (scroll, sizing, overflow, close icon).
 - [x] Local symbol search now hydrates from `data/universe.csv` + `mapping.csv`, with per-symbol candle generation via `scripts/generate_kbar.py`.

@@ -1,12 +1,12 @@
 use core::Candle;
-use gpui::{App, Application, Bounds, Context, Render, Window, WindowBounds, WindowOptions, div, prelude::*, px, rgb, size};
+use gpui::{App, Bounds, Context, Render, Window, WindowBounds, WindowOptions, div, prelude::*, px, rgb, size};
 use std::{cell::RefCell, rc::Rc};
 
 use crate::store::default_store;
-use crate::{ChartMeta, ChartView};
+use crate::{ChartMeta, ChartView, application_with_assets};
 
 pub fn launch_runtime() {
-    Application::new().run(|cx: &mut App| {
+    application_with_assets().run(|cx: &mut App| {
         let bounds = Bounds::centered(None, size(px(1400.), px(900.)), cx);
         cx.open_window(
             WindowOptions {

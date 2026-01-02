@@ -2,7 +2,8 @@ use std::path::Path;
 
 use core::Interval;
 use gpui::{
-    Context, MouseButton, MouseDownEvent, Render, SharedString, Window, div, prelude::*, px, rgb,
+    Context, MouseButton, MouseDownEvent, Render, SharedString, StatefulInteractiveElement, Window,
+    div, img, prelude::*, px, rgb,
 };
 use time::macros::format_description;
 
@@ -283,7 +284,14 @@ impl Render for ChartView {
             left_toolbar = left_toolbar.child(toolbar_button(*item, idx == 0));
         }
 
-        let mut watchlist_list = div().flex().flex_col().gap_2();
+        let mut watchlist_list = div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .min_w(px(0.))
+            .max_h(px(320.))
+            .pr_1();
+        watchlist_list.style().overflow.y = Some(gpui::Overflow::Scroll);
         let symbols = if self.watchlist_symbols().is_empty() {
             ChartView::default_watchlist()
         } else {
@@ -298,7 +306,7 @@ impl Render for ChartView {
                 rgb(0x0f172a)
             };
             let symbol_label = if is_loading {
-                format!("{} • loading…", symbol)
+                format!("{symbol} - loading")
             } else {
                 symbol.clone()
             };
@@ -320,10 +328,66 @@ impl Render for ChartView {
                 this.add_to_watchlist(symbol_for_load.clone());
             });
             let remove_handler =
-                _cx.listener(move |this: &mut Self, _: &MouseDownEvent, window, _| {
+                _cx.listener(move |this: &mut Self, _: &MouseDownEvent, window, cx| {
                     this.remove_from_watchlist(&symbol_for_remove);
+                    cx.stop_propagation();
                     window.refresh();
                 });
+            let left = div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .min_w(px(0.))
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(gpui::white())
+                        .truncate()
+                        .child(symbol_label),
+                )
+                .child(
+                    div()
+                        .px_2()
+                        .py_1()
+                        .rounded_sm()
+                        .bg(rgb(0x1f2937))
+                        .text_xs()
+                        .text_color(rgb(0x9ca3af))
+                        .child(exchange),
+                );
+            let remove_button = div()
+                .w(px(24.))
+                .h(px(24.))
+                .rounded_full()
+                .bg(rgb(0x111827))
+                .border_1()
+                .border_color(rgb(0x1f2937))
+                .flex()
+                .items_center()
+                .justify_center()
+                .on_mouse_down(MouseButton::Left, remove_handler)
+                .child(
+                    img("full-cross-circle.svg")
+                        .w(px(14.))
+                        .h(px(14.))
+                        .text_color(rgb(0x9ca3af)),
+                );
+            let right = div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .min_w(px(0.))
+                .flex_1()
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(0.))
+                        .text_sm()
+                        .text_color(gpui::white())
+                        .truncate()
+                        .child(label),
+                )
+                .child(remove_button);
             watchlist_list = watchlist_list.child(
                 div()
                     .px_3()
@@ -334,48 +398,11 @@ impl Render for ChartView {
                     .border_color(rgb(0x1f2937))
                     .flex()
                     .items_center()
-                    .justify_between()
+                    .gap_2()
+                    .min_w(px(0.))
                     .on_mouse_down(MouseButton::Left, handler)
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .text_color(gpui::white())
-                                    .child(symbol_label),
-                            )
-                            .child(
-                                div()
-                                    .px_2()
-                                    .py_1()
-                                    .rounded_sm()
-                                    .bg(rgb(0x1f2937))
-                                    .text_xs()
-                                    .text_color(rgb(0x9ca3af))
-                                    .child(exchange),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .child(div().text_sm().child(label))
-                            .child(
-                                div()
-                                    .px_2()
-                                    .py_1()
-                                    .rounded_sm()
-                                    .bg(rgb(0x1f2937))
-                                    .text_xs()
-                                    .text_color(rgb(0x9ca3af))
-                                    .on_mouse_down(MouseButton::Left, remove_handler)
-                                    .child("×"),
-                            ),
-                    ),
+                    .child(left)
+                    .child(right),
             );
         }
 
@@ -388,6 +415,7 @@ impl Render for ChartView {
             .flex()
             .flex_col()
             .gap_3()
+            .max_h(px(420.))
             .child(
                 div()
                     .flex()

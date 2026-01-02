@@ -1,5 +1,6 @@
 use core::{Candle, Interval};
-use gpui::{App, Application, Bounds, WindowBounds, WindowOptions, prelude::*, px, size};
+use gpui::{App, Bounds, WindowBounds, WindowOptions, prelude::*, px, size};
+use crate::application_with_assets;
 
 mod canvas;
 mod error_view;
@@ -19,7 +20,7 @@ pub struct ChartMeta {
 
 pub fn launch_chart(candles: Result<Vec<Candle>, String>, meta: ChartMeta) {
     let view_meta = meta.clone();
-    Application::new().run(move |cx: &mut App| {
+    application_with_assets().run(move |cx: &mut App| {
         let bounds = Bounds::centered(None, size(px(1200.), px(800.)), cx);
         match candles.clone() {
             Ok(base) => {
