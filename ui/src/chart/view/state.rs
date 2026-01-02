@@ -3,6 +3,7 @@ use std::{
     collections::HashMap,
     path::{Path, PathBuf},
     rc::Rc,
+    sync::Arc,
 };
 
 use core::{Candle, Interval, LoadOptions, bounds, load_csv, resample};
@@ -28,8 +29,8 @@ pub const QUICK_RANGE_WINDOWS: [(&str, Option<Duration>); 8] = [
 ];
 
 pub struct ChartView {
-    pub(super) base_candles: Vec<Candle>,
-    pub(super) candles: Vec<Candle>,
+    pub(super) base_candles: Arc<[Candle]>,
+    pub(super) candles: Arc<[Candle]>,
     pub(super) price_min: f64,
     pub(super) price_max: f64,
     interval: Option<Interval>,
@@ -57,6 +58,7 @@ pub struct ChartView {
     symbols: HashMap<String, SymbolMeta>,
     symbol_search_filter: String,
     universe: Vec<SymbolSearchEntry>,
+    resample_cache: Vec<(Option<Interval>, Arc<[Candle]>)>,
 }
 
 impl ChartView {
@@ -65,14 +67,14 @@ impl ChartView {
         meta: ChartMeta,
         store: Option<Rc<RefCell<DuckDbStore>>>,
     ) -> Self {
-        let base = base_candles;
+        let base_arc: Arc<[Candle]> = base_candles.into();
         let (candles, interval) = match meta.initial_interval {
-            Some(i) => (resample(&base, i), Some(i)),
-            None => (base.clone(), None),
+            Some(i) => (Arc::from(resample(&base_arc, i)), Some(i)),
+            None => (base_arc.clone(), None),
         };
         let (price_min, price_max) = padded_bounds(&candles);
         Self {
-            base_candles: base,
+            base_candles: base_arc.clone(),
             candles,
             price_min,
             price_max,
@@ -101,6 +103,7 @@ impl ChartView {
             symbols: HashMap::new(),
             symbol_search_filter: "All".to_string(),
             universe: Vec::new(),
+            resample_cache: vec![(None, base_arc)],
         }
     }
 
@@ -357,10 +360,7 @@ impl ChartView {
 
     pub(super) fn apply_interval(&mut self, interval: Option<Interval>, persist: bool) {
         self.interval = interval;
-        self.candles = match interval {
-            Some(i) => resample(&self.base_candles, i),
-            None => self.base_candles.clone(),
-        };
+        self.candles = self.resampled_for(interval);
         self.view_offset = 0.0;
         self.zoom = 1.0;
         self.hover_index = None;
@@ -373,6 +373,23 @@ impl ChartView {
         }
     }
 
+    fn resampled_for(&mut self, interval: Option<Interval>) -> Arc<[Candle]> {
+        if let Some((_, cached)) = self
+            .resample_cache
+            .iter()
+            .find(|(cached_interval, _)| *cached_interval == interval)
+        {
+            return cached.clone();
+        }
+
+        let arc = match interval {
+            Some(i) => Arc::from(resample(&self.base_candles, i)),
+            None => self.base_candles.clone(),
+        };
+        self.resample_cache.push((interval, arc.clone()));
+        arc
+    }
+
     pub(crate) fn replace_data(
         &mut self,
         base: Vec<Candle>,
@@ -380,7 +397,10 @@ impl ChartView {
         persist_session: bool,
         add_to_watchlist: bool,
     ) {
-        self.base_candles = base;
+        let base_arc: Arc<[Candle]> = base.into();
+        self.base_candles = base_arc.clone();
+        self.resample_cache.clear();
+        self.resample_cache.push((None, base_arc.clone()));
         let interval = self.interval;
         self.apply_interval(interval, persist_session);
         self.source = source;

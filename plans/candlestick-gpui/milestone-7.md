@@ -21,9 +21,9 @@ Plan
 - Polish watchlist panel UI (scroll container with max size, ellipsis overflow, consistent controls, updated close icon).
 - Improve UI readability and performance:
   - [x] Avoid cloning candles in render/canvas: pass slices/Arc<[Candle]> into chart/volume canvases and reuse buffers instead of cloning per frame.
-  - [ ] Avoid cloning the full symbol universe on every search render: borrow and filter with iterators or cache per-filter subsets.
-  - [ ] Reduce `render` monolith size: split header/watchlist/instrument/overlays into helpers to simplify future changes.
-  - [ ] Reuse resampled data: keep `base_candles` in Arc and cache interval resamples to avoid full clones on every interval switch or replace.
+  - [x] Avoid cloning the full symbol universe on every search render: borrow and filter with iterators or cache per-filter subsets.
+  - [x] Reduce `render` monolith size: split header/watchlist/instrument/overlays into helpers to simplify future changes.
+  - [x] Reuse resampled data: keep `base_candles` in Arc and cache interval resamples to avoid full clones on every interval switch or replace.
 
 Status
 
