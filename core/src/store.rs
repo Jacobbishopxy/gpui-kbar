@@ -337,6 +337,37 @@ impl DuckDbStore {
         }
         Ok(None)
     }
+
+    pub fn set_watchlist(&self, symbols: &[String]) -> Result<(), StoreError> {
+        if self.connections().count() == 0 {
+            return Err(StoreError::NoBackend);
+        }
+        for conn in self.connections() {
+            let tx = conn.unchecked_transaction()?;
+            tx.execute("DELETE FROM watchlist", [])?;
+            for sym in symbols {
+                tx.execute("INSERT INTO watchlist(symbol) VALUES (?)", params![sym])?;
+            }
+            tx.commit()?;
+        }
+        Ok(())
+    }
+
+    pub fn get_watchlist(&self) -> Result<Vec<String>, StoreError> {
+        let mut out = Vec::new();
+        for conn in self.connections() {
+            let mut stmt = conn.prepare("SELECT symbol FROM watchlist ORDER BY symbol ASC")?;
+            let mut rows = stmt.query([])?;
+            while let Some(row) = rows.next()? {
+                let sym: String = row.get(0)?;
+                out.push(sym);
+            }
+            if !out.is_empty() {
+                return Ok(out);
+            }
+        }
+        Ok(out)
+    }
 }
 
 fn init_schema(conn: &Connection) -> Result<(), StoreError> {
@@ -364,6 +395,9 @@ fn init_schema(conn: &Connection) -> Result<(), StoreError> {
         CREATE TABLE IF NOT EXISTS session_state (
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS watchlist (
+            symbol TEXT PRIMARY KEY
         );
         ",
     )?;

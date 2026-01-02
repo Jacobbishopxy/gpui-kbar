@@ -33,53 +33,23 @@ const INTERVAL_OPTIONS: &[(Option<Interval>, &str)] = &[
     (Some(Interval::Day(1)), "1d"),
 ];
 
-#[derive(Clone, Copy)]
-struct WatchlistEntry {
-    symbol: &'static str,
-    price: &'static str,
-    change: &'static str,
-    source: &'static str,
-}
-
-const WATCHLIST_ITEMS: &[WatchlistEntry] = &[
-    WatchlistEntry {
-        symbol: "AAPL",
-        price: "273.81",
-        change: "+0.53%",
-        source: "../data/sample.csv",
-    },
-    WatchlistEntry {
-        symbol: "TSLA",
-        price: "485.40",
-        change: "-0.03%",
-        source: "../data/sample.csv",
-    },
-    WatchlistEntry {
-        symbol: "NFLX",
-        price: "93.64",
-        change: "+0.15%",
-        source: "../data/sample.csv",
-    },
-    WatchlistEntry {
-        symbol: "USOIL",
-        price: "58.38",
-        change: "-0.02%",
-        source: "../data/sample.csv",
-    },
-];
-
 fn resolve_watch_path(relative: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join(relative)
+    let path = Path::new(relative);
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join(relative)
+    }
 }
 
 fn start_watchlist_load(
     view: &mut ChartView,
     cx: &mut Context<ChartView>,
     window: &mut Window,
-    symbol: &'static str,
-    source: &'static str,
+    symbol: String,
+    source: String,
 ) {
-    if view.loading_symbol.as_deref() == Some(symbol) {
+    if view.loading_symbol.as_deref() == Some(&symbol) {
         return;
     }
 
@@ -92,29 +62,29 @@ fn start_watchlist_load(
         let cached = {
             let store_ref = store_rc.borrow();
             store_ref
-                .load_candles(symbol, None)
+                .load_candles(&symbol, None)
                 .ok()
                 .filter(|c| !c.is_empty())
         };
         if let Some(cached) = cached {
-            view.replace_data(cached, symbol.to_string());
+            view.replace_data(cached, symbol.clone());
             view.loading_symbol = None;
             view.load_error = None;
             let _ = store_rc
                 .borrow_mut()
-                .set_session_value("active_source", symbol);
+                .set_session_value("active_source", &symbol);
             window.refresh();
             return;
         }
     }
 
-    view.loading_symbol = Some(symbol.to_string());
+    view.loading_symbol = Some(symbol.clone());
     view.load_error = None;
     window.refresh();
 
     let entity = cx.entity();
-    let path = resolve_watch_path(source);
-    let symbol_string = symbol.to_string();
+    let path = resolve_watch_path(&source);
+    let symbol_string = symbol.clone();
     let store = view.store.clone();
 
     let task = cx.background_executor().spawn(async move {
@@ -410,27 +380,47 @@ impl Render for ChartView {
         }
 
         let mut watchlist_list = div().flex().flex_col().gap_2();
-        for item in WATCHLIST_ITEMS.iter() {
-            let is_loading = self.loading_symbol.as_deref() == Some(item.symbol);
-            let active = self.source == item.symbol;
+        let symbols = if self.watchlist_symbols().is_empty() {
+            ChartView::default_watchlist()
+        } else {
+            self.watchlist_symbols()
+        };
+        for symbol in symbols.into_iter() {
+            let is_loading = self.loading_symbol.as_deref() == Some(&symbol);
+            let active = self.source == symbol;
             let bg = if active || is_loading {
                 rgb(0x111827)
             } else {
                 rgb(0x0f172a)
             };
-            let change_color = if item.change.starts_with('-') {
-                rgb(0xef4444)
-            } else {
-                rgb(0x22c55e)
-            };
             let symbol_label = if is_loading {
-                format!("{} • loading…", item.symbol)
+                format!("{} • loading…", symbol)
             } else {
-                item.symbol.to_string()
+                symbol.clone()
             };
+            let meta = self.symbol_meta(&symbol);
+            let label = meta
+                .as_ref()
+                .map(|m| m.name.clone())
+                .filter(|n| !n.is_empty())
+                .unwrap_or_else(|| symbol.clone());
+            let exchange = meta
+                .as_ref()
+                .map(|m| m.exchange.clone())
+                .filter(|e| !e.is_empty())
+                .unwrap_or_else(|| "Symbol".to_string());
+            let symbol_for_load = symbol.clone();
+            let symbol_for_remove = symbol.clone();
             let handler = _cx.listener(move |this: &mut Self, _: &MouseDownEvent, window, cx| {
-                start_watchlist_load(this, cx, window, item.symbol, item.source);
+                let source = this.resolve_symbol_source(&symbol_for_load);
+                start_watchlist_load(this, cx, window, symbol_for_load.clone(), source);
+                this.add_to_watchlist(symbol_for_load.clone());
             });
+            let remove_handler =
+                _cx.listener(move |this: &mut Self, _: &MouseDownEvent, window, _| {
+                    this.remove_from_watchlist(&symbol_for_remove);
+                    window.refresh();
+                });
             watchlist_list = watchlist_list.child(
                 div()
                     .px_3()
@@ -462,7 +452,7 @@ impl Render for ChartView {
                                     .bg(rgb(0x1f2937))
                                     .text_xs()
                                     .text_color(rgb(0x9ca3af))
-                                    .child("Stock"),
+                                    .child(exchange),
                             ),
                     )
                     .child(
@@ -470,8 +460,18 @@ impl Render for ChartView {
                             .flex()
                             .items_center()
                             .gap_2()
-                            .child(div().text_sm().child(item.price))
-                            .child(div().text_xs().text_color(change_color).child(item.change)),
+                            .child(div().text_sm().child(label))
+                            .child(
+                                div()
+                                    .px_2()
+                                    .py_1()
+                                    .rounded_sm()
+                                    .bg(rgb(0x1f2937))
+                                    .text_xs()
+                                    .text_color(rgb(0x9ca3af))
+                                    .on_mouse_down(MouseButton::Left, remove_handler)
+                                    .child("×"),
+                            ),
                     ),
             );
         }

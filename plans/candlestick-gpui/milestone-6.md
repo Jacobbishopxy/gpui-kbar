@@ -32,12 +32,13 @@ Status
 - [x] Further refactor: moved header/sidebar layouts and interval menu into dedicated modules to keep render.rs readable.
 - [x] Interval selector menu re-anchored using local positioning so header controls stay aligned when outer layouts (e.g. runtime sidebar, future collapsible panes) shift.
 - [x] Watchlist triggers symbol loads; footer shows playback/timezone; quick ranges and replay toggles added; DuckDB storage layer with range filters landed.
-- [x] DuckDB-backed caching + session restore for active symbol/interval/range/replay wired into runtime + watchlist.
+- [x] DuckDB-backed caching + session restore for active symbol/interval/range/replay/watchlist wired into runtime + watchlist; symbol catalog (data/symbols.csv) now drives watchlist display/load paths with add/remove persistence.
+- [ ] Indicator caches persisted/restored via DuckDB.
 - [ ] Implement overlays/drawings/interactions polish; snapshot tests/perf passes.
 
 Next up
 
-1) Persist full session (interval/range/replay/watchlist) and indicator caches in DuckDB; restore on startup.
+1) Persist indicator caches in DuckDB alongside candles/session and hydrate on startup.
 2) Hook interval presets to real keyboard shortcuts and highlight active interval in header.
 3) Make timezone dynamic (system or exchange tz) and surface actual replay state (paused/playing, speed).
 4) Start overlay/drawing scaffolding (MA overlay toggle + basic trendline gestures).

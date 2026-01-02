@@ -1,10 +1,11 @@
-use std::{cell::RefCell, rc::Rc};
+use std::{cell::RefCell, collections::HashMap, path::Path, rc::Rc};
 
 use core::{Candle, Interval, bounds, resample};
 use gpui::{Bounds, Pixels, SharedString};
 use time::Duration;
 
 use super::super::ChartMeta;
+use crate::data::symbols::{SymbolMeta, load_symbols};
 use core::DuckDbStore;
 
 pub const QUICK_RANGE_WINDOWS: [(&str, Option<Duration>); 8] = [
@@ -42,9 +43,20 @@ pub struct ChartView {
     pub loading_symbol: Option<String>,
     pub load_error: Option<String>,
     pub store: Option<Rc<RefCell<DuckDbStore>>>,
+    pub watchlist: Vec<String>,
+    hydrated: bool,
+    symbols: HashMap<String, SymbolMeta>,
 }
 
 impl ChartView {
+    pub fn default_watchlist() -> Vec<String> {
+        vec![
+            "AAPL".to_string(),
+            "TSLA".to_string(),
+            "NFLX".to_string(),
+            "USOIL".to_string(),
+        ]
+    }
     pub(crate) fn new(
         base_candles: Vec<Candle>,
         meta: ChartMeta,
@@ -80,6 +92,9 @@ impl ChartView {
             loading_symbol: None,
             load_error: None,
             store,
+            watchlist: Vec::new(),
+            hydrated: false,
+            symbols: HashMap::new(),
         }
     }
 
@@ -104,6 +119,100 @@ impl ChartView {
 
     pub fn replay_enabled(&self) -> bool {
         self.replay_mode
+    }
+
+    pub fn watchlist_symbols(&self) -> Vec<String> {
+        self.watchlist.clone()
+    }
+
+    pub fn symbol_meta(&mut self, symbol: &str) -> Option<SymbolMeta> {
+        self.ensure_symbol_catalog();
+        self.symbols.get(symbol).cloned()
+    }
+
+    pub fn resolve_symbol_source(&mut self, symbol: &str) -> String {
+        self.ensure_symbol_catalog();
+        self.symbols
+            .get(symbol)
+            .map(|meta| meta.source.clone())
+            .unwrap_or_else(|| "../data/sample.csv".to_string())
+    }
+
+    pub fn current_source(&self) -> String {
+        self.source.clone()
+    }
+
+    pub fn hydrate_from_store(&mut self) {
+        if self.hydrated {
+            return;
+        }
+        if let Some(store_rc) = self.store.clone() {
+            let (watchlist, interval_str, range_idx_str, replay_str) = {
+                let store = store_rc.borrow();
+                (
+                    store.get_watchlist().unwrap_or_default(),
+                    store.get_session_value("interval").ok().flatten(),
+                    store.get_session_value("range_index").ok().flatten(),
+                    store.get_session_value("replay_mode").ok().flatten(),
+                )
+            };
+
+            if watchlist.is_empty() {
+                self.watchlist = Self::default_watchlist();
+                let _ = store_rc.borrow_mut().set_watchlist(&self.watchlist);
+            } else {
+                self.watchlist = watchlist;
+            }
+
+            if let Some(interval) = interval_str.and_then(|interval| match interval.as_str() {
+                "raw" => Some(None),
+                s if s.ends_with('s') => s
+                    .trim_end_matches('s')
+                    .parse()
+                    .ok()
+                    .map(Interval::Second)
+                    .map(Some),
+                s if s.ends_with('m') => s
+                    .trim_end_matches('m')
+                    .parse()
+                    .ok()
+                    .map(Interval::Minute)
+                    .map(Some),
+                s if s.ends_with('h') => s
+                    .trim_end_matches('h')
+                    .parse()
+                    .ok()
+                    .map(Interval::Hour)
+                    .map(Some),
+                s if s.ends_with('d') => s
+                    .trim_end_matches('d')
+                    .parse()
+                    .ok()
+                    .map(Interval::Day)
+                    .map(Some),
+                _ => None,
+            }) {
+                self.apply_interval(interval);
+            }
+
+            if let Some(idx) = range_idx_str.and_then(|r| r.parse::<usize>().ok()) {
+                self.apply_range_index(idx);
+            }
+
+            if let Some(replay) = replay_str {
+                self.set_replay_mode(replay == "true");
+            }
+            self.hydrated = true;
+        }
+    }
+
+    pub fn add_to_watchlist(&mut self, symbol: String) {
+        if !self.watchlist.iter().any(|s| s == &symbol) {
+            self.watchlist.push(symbol.clone());
+            if let Some(store) = &self.store {
+                let _ = store.borrow_mut().set_watchlist(&self.watchlist);
+            }
+        }
     }
 
     pub(super) fn visible_len(&self) -> f32 {
@@ -155,6 +264,7 @@ impl ChartView {
         self.source = source;
         self.load_error = None;
         self.loading_symbol = None;
+        self.add_to_watchlist(self.source.clone());
         let _ = self.persist_session("active_source", &self.source);
     }
 
@@ -211,6 +321,26 @@ impl ChartView {
                 .map_err(|_| ())?;
         }
         Ok(())
+    }
+
+    fn ensure_symbol_catalog(&mut self) {
+        if !self.symbols.is_empty() {
+            return;
+        }
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../data/symbols.csv");
+        if let Ok(map) = load_symbols(path.to_str().unwrap_or_default()) {
+            self.symbols = map;
+        }
+    }
+
+    pub fn remove_from_watchlist(&mut self, symbol: &str) {
+        let len_before = self.watchlist.len();
+        self.watchlist.retain(|s| s != symbol);
+        if len_before != self.watchlist.len() {
+            if let Some(store) = &self.store {
+                let _ = store.borrow_mut().set_watchlist(&self.watchlist);
+            }
+        }
     }
 }
 

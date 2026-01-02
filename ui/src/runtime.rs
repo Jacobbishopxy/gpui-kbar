@@ -217,6 +217,7 @@ impl RuntimeView {
         }
         let _ = self.chart.update(cx, |chart, cx| {
             chart.replace_data(candles, source);
+            chart.add_to_watchlist(chart.current_source());
             cx.notify();
         });
         window.refresh();
@@ -254,6 +255,8 @@ impl RuntimeView {
 impl Render for RuntimeView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.restore_session(_window, cx);
+        // Hydrate per-view state from store once per render cycle if not loaded yet.
+        let _ = self.chart.update(cx, |chart, _| chart.hydrate_from_store());
 
         let toggle_picker = cx.listener(|this: &mut Self, _: &MouseDownEvent, window, _| {
             this.picker_open = !this.picker_open;
