@@ -54,14 +54,6 @@ pub struct ChartView {
 }
 
 impl ChartView {
-    pub fn default_watchlist() -> Vec<String> {
-        vec![
-            "AAPL".to_string(),
-            "TSLA".to_string(),
-            "NFLX".to_string(),
-            "USOIL".to_string(),
-        ]
-    }
     pub(crate) fn new(
         base_candles: Vec<Candle>,
         meta: ChartMeta,
@@ -262,12 +254,7 @@ impl ChartView {
                 .load_user_session()
                 .unwrap_or_default();
 
-            if session.watchlist.is_empty() {
-                self.watchlist = Self::default_watchlist();
-                let _ = store_rc.borrow_mut().set_watchlist(&self.watchlist);
-            } else {
-                self.watchlist = session.watchlist;
-            }
+            self.watchlist = session.watchlist;
 
             if let Some(interval) = session.interval.and_then(|interval| match interval.as_str() {
                 "raw" => Some(None),

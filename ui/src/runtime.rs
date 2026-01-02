@@ -32,10 +32,7 @@ impl RuntimeView {
         let store = default_store();
         let store_rc = store.map(|s| Rc::new(RefCell::new(s)));
 
-        let default_source = ChartView::default_watchlist()
-            .first()
-            .cloned()
-            .unwrap_or_else(|| "Data".to_string());
+        let default_source = "AAPL".to_string();
         let chart = cx.new(|_| {
             ChartView::new(
                 Vec::<Candle>::new(),

@@ -2,8 +2,8 @@ use std::path::Path;
 
 use core::Interval;
 use gpui::{
-    Context, MouseButton, MouseDownEvent, Render, SharedString, StatefulInteractiveElement, Window,
-    div, img, prelude::*, px, rgb,
+    Context, MouseButton, MouseDownEvent, Render, SharedString, Window, div, prelude::*, px, rgb,
+    svg,
 };
 use time::macros::format_description;
 
@@ -292,118 +292,125 @@ impl Render for ChartView {
             .max_h(px(320.))
             .pr_1();
         watchlist_list.style().overflow.y = Some(gpui::Overflow::Scroll);
-        let symbols = if self.watchlist_symbols().is_empty() {
-            ChartView::default_watchlist()
-        } else {
-            self.watchlist_symbols()
-        };
-        for symbol in symbols.into_iter() {
-            let is_loading = self.loading_symbol.as_deref() == Some(&symbol);
-            let active = self.source == symbol;
-            let bg = if active || is_loading {
-                rgb(0x111827)
-            } else {
-                rgb(0x0f172a)
-            };
-            let symbol_label = if is_loading {
-                format!("{symbol} - loading")
-            } else {
-                symbol.clone()
-            };
-            let meta = self.symbol_meta(&symbol);
-            let label = meta
-                .as_ref()
-                .map(|m| m.name.clone())
-                .filter(|n| !n.is_empty())
-                .unwrap_or_else(|| symbol.clone());
-            let exchange = meta
-                .as_ref()
-                .map(|m| m.exchange.clone())
-                .filter(|e| !e.is_empty())
-                .unwrap_or_else(|| "Symbol".to_string());
-            let symbol_for_load = symbol.clone();
-            let symbol_for_remove = symbol.clone();
-            let handler = _cx.listener(move |this: &mut Self, _: &MouseDownEvent, window, cx| {
-                this.start_symbol_load(symbol_for_load.clone(), window, cx);
-                this.add_to_watchlist(symbol_for_load.clone());
-            });
-            let remove_handler =
-                _cx.listener(move |this: &mut Self, _: &MouseDownEvent, window, cx| {
-                    this.remove_from_watchlist(&symbol_for_remove);
-                    cx.stop_propagation();
-                    window.refresh();
-                });
-            let left = div()
-                .flex()
-                .items_center()
-                .gap_2()
-                .min_w(px(0.))
-                .child(
-                    div()
-                        .text_sm()
-                        .text_color(gpui::white())
-                        .truncate()
-                        .child(symbol_label),
-                )
-                .child(
-                    div()
-                        .px_2()
-                        .py_1()
-                        .rounded_sm()
-                        .bg(rgb(0x1f2937))
-                        .text_xs()
-                        .text_color(rgb(0x9ca3af))
-                        .child(exchange),
-                );
-            let remove_button = div()
-                .w(px(24.))
-                .h(px(24.))
-                .rounded_full()
-                .bg(rgb(0x111827))
-                .border_1()
-                .border_color(rgb(0x1f2937))
-                .flex()
-                .items_center()
-                .justify_center()
-                .on_mouse_down(MouseButton::Left, remove_handler)
-                .child(
-                    img("full-cross-circle.svg")
-                        .w(px(14.))
-                        .h(px(14.))
-                        .text_color(rgb(0x9ca3af)),
-                );
-            let right = div()
-                .flex()
-                .items_center()
-                .gap_2()
-                .min_w(px(0.))
-                .flex_1()
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w(px(0.))
-                        .text_sm()
-                        .text_color(gpui::white())
-                        .truncate()
-                        .child(label),
-                )
-                .child(remove_button);
+        let symbols = self.watchlist_symbols();
+        if symbols.is_empty() {
             watchlist_list = watchlist_list.child(
                 div()
                     .px_3()
                     .py_2()
                     .rounded_md()
-                    .bg(bg)
+                    .bg(rgb(0x0f172a))
                     .border_1()
                     .border_color(rgb(0x1f2937))
+                    .text_sm()
+                    .text_color(rgb(0x9ca3af))
+                    .child("Watchlist is empty. Add a symbol to get started."),
+            );
+        } else {
+            for symbol in symbols.into_iter() {
+                let is_loading = self.loading_symbol.as_deref() == Some(&symbol);
+                let active = self.source == symbol;
+                let bg = if active || is_loading {
+                    rgb(0x111827)
+                } else {
+                    rgb(0x0f172a)
+                };
+                let symbol_label = if is_loading {
+                    format!("{symbol} - loading")
+                } else {
+                    symbol.clone()
+                };
+                let meta = self.symbol_meta(&symbol);
+                let label = meta
+                    .as_ref()
+                    .map(|m| m.name.clone())
+                    .filter(|n| !n.is_empty())
+                    .unwrap_or_else(|| symbol.clone());
+                let exchange = meta
+                    .as_ref()
+                    .map(|m| m.exchange.clone())
+                    .filter(|e| !e.is_empty())
+                    .unwrap_or_else(|| "Symbol".to_string());
+                let symbol_for_load = symbol.clone();
+                let symbol_for_remove = symbol.clone();
+                let handler =
+                    _cx.listener(move |this: &mut Self, _: &MouseDownEvent, window, cx| {
+                        this.start_symbol_load(symbol_for_load.clone(), window, cx);
+                        this.add_to_watchlist(symbol_for_load.clone());
+                    });
+                let remove_handler =
+                    _cx.listener(move |this: &mut Self, _: &MouseDownEvent, window, cx| {
+                        this.remove_from_watchlist(&symbol_for_remove);
+                        cx.stop_propagation();
+                        window.refresh();
+                    });
+                let left = div()
                     .flex()
                     .items_center()
                     .gap_2()
                     .min_w(px(0.))
-                    .on_mouse_down(MouseButton::Left, handler)
-                    .child(left)
-                    .child(right),
-            );
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(gpui::white())
+                            .truncate()
+                            .child(symbol_label),
+                    )
+                    .child(
+                        div()
+                            .px_2()
+                            .py_1()
+                            .rounded_sm()
+                            .bg(rgb(0x1f2937))
+                            .text_xs()
+                            .text_color(rgb(0x9ca3af))
+                            .child(exchange),
+                    );
+                let remove_button = div()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .on_mouse_down(MouseButton::Left, remove_handler)
+                    .child(
+                        svg()
+                            .path("cross-circle.svg")
+                            .w(px(24.))
+                            .h(px(24.))
+                            .text_color(rgb(0x9ca3af)),
+                    );
+                let right = div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .min_w(px(0.))
+                    .flex_1()
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.))
+                            .text_sm()
+                            .text_color(gpui::white())
+                            .truncate()
+                            .child(label),
+                    )
+                    .child(remove_button);
+                watchlist_list = watchlist_list.child(
+                    div()
+                        .px_3()
+                        .py_2()
+                        .rounded_md()
+                        .bg(bg)
+                        .border_1()
+                        .border_color(rgb(0x1f2937))
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .min_w(px(0.))
+                        .on_mouse_down(MouseButton::Left, handler)
+                        .child(left)
+                        .child(right),
+                );
+            }
         }
 
         let mut watchlist_panel = div()
