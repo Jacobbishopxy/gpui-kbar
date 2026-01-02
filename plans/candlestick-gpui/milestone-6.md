@@ -33,6 +33,7 @@ Status
 - [x] Interval selector menu re-anchored using local positioning so header controls stay aligned when outer layouts (e.g. runtime sidebar, future collapsible panes) shift.
 - [x] Watchlist triggers symbol loads; footer shows playback/timezone; quick ranges and replay toggles added; DuckDB storage layer with range filters landed.
 - [x] DuckDB-backed caching + session restore for active symbol/interval/range/replay/watchlist wired into runtime + watchlist; symbol catalog (data/symbols.csv) now drives watchlist display/load paths with add/remove persistence.
+- [x] User session snapshot struct added (active source, interval, range, replay, watchlist) with single-call hydration; candle writes/readbacks de-duped per timestamp to prevent duplication on restore.
 - [ ] Indicator caches persisted/restored via DuckDB.
 - [ ] Implement overlays/drawings/interactions polish; snapshot tests/perf passes.
 

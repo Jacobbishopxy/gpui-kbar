@@ -7,7 +7,7 @@ mod types;
 pub use error::LoadError;
 pub use load::{load_csv, load_parquet};
 pub use resample::{bounds, resample};
-pub use store::{DuckDbStore, StorageMode, StoreError};
+pub use store::{DuckDbStore, StorageMode, StoreError, UserSession};
 pub use types::{Candle, ColumnMapping, Interval, LoadOptions};
 
 #[cfg(test)]

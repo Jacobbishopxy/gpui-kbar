@@ -29,6 +29,15 @@ pub enum DataRange {
     },
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct UserSession {
+    pub active_source: Option<String>,
+    pub interval: Option<String>,
+    pub range_index: Option<usize>,
+    pub replay_mode: Option<bool>,
+    pub watchlist: Vec<String>,
+}
+
 #[derive(Debug, Error)]
 pub enum StoreError {
     #[error("no storage backend available")]
@@ -376,6 +385,26 @@ impl DuckDbStore {
         }
         Ok(out)
     }
+
+    pub fn load_user_session(&self) -> Result<UserSession, StoreError> {
+        let active_source = self.get_session_value("active_source")?;
+        let interval = self.get_session_value("interval")?;
+        let range_index = self
+            .get_session_value("range_index")?
+            .and_then(|r| r.parse::<usize>().ok());
+        let replay_mode = self
+            .get_session_value("replay_mode")?
+            .map(|v| v == "true");
+        let watchlist = self.get_watchlist()?;
+
+        Ok(UserSession {
+            active_source,
+            interval,
+            range_index,
+            replay_mode,
+            watchlist,
+        })
+    }
 }
 
 fn init_schema(conn: &Connection) -> Result<(), StoreError> {
@@ -574,5 +603,32 @@ mod tests {
         assert_eq!(loaded.len(), sample_candles().len());
         assert_eq!(loaded[0].timestamp, candles[0].timestamp);
         assert!((loaded[0].open - 9.99).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn load_user_session_collects_all_values() {
+        let store = DuckDbStore::new(temp_path(), StorageMode::Memory).unwrap();
+        store
+            .set_session_value("active_source", "AAPL")
+            .expect("active source");
+        store
+            .set_session_value("interval", "5m")
+            .expect("interval");
+        store
+            .set_session_value("range_index", "3")
+            .expect("range");
+        store
+            .set_session_value("replay_mode", "true")
+            .expect("replay");
+        store
+            .set_watchlist(&["TSLA".to_string(), "AAPL".to_string()])
+            .expect("watchlist");
+
+        let session = store.load_user_session().expect("session");
+        assert_eq!(session.active_source.as_deref(), Some("AAPL"));
+        assert_eq!(session.interval.as_deref(), Some("5m"));
+        assert_eq!(session.range_index, Some(3));
+        assert_eq!(session.replay_mode, Some(true));
+        assert_eq!(session.watchlist, vec!["AAPL".to_string(), "TSLA".to_string()]);
     }
 }

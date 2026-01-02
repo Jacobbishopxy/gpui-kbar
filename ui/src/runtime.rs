@@ -234,18 +234,19 @@ impl RuntimeView {
             return;
         };
 
-        let active = store
-            .borrow()
-            .get_session_value("active_source")
-            .ok()
-            .flatten();
-        let cached = active.as_deref().and_then(|source| {
-            store
-                .borrow()
-                .load_candles(source, None)
-                .ok()
-                .filter(|c| !c.is_empty())
-                .map(|candles| (source.to_string(), candles))
+        let session = store.borrow().load_user_session().ok();
+        let cached = session.as_ref().and_then(|session| {
+            session
+                .active_source
+                .as_deref()
+                .and_then(|source| {
+                    store
+                        .borrow()
+                        .load_candles(source, None)
+                        .ok()
+                        .filter(|c| !c.is_empty())
+                        .map(|candles| (source.to_string(), candles))
+                })
         });
 
         if let Some((source, candles)) = cached {

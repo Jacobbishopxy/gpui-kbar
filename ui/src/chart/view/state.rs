@@ -147,24 +147,19 @@ impl ChartView {
             return;
         }
         if let Some(store_rc) = self.store.clone() {
-            let (watchlist, interval_str, range_idx_str, replay_str) = {
-                let store = store_rc.borrow();
-                (
-                    store.get_watchlist().unwrap_or_default(),
-                    store.get_session_value("interval").ok().flatten(),
-                    store.get_session_value("range_index").ok().flatten(),
-                    store.get_session_value("replay_mode").ok().flatten(),
-                )
-            };
+            let session = store_rc
+                .borrow()
+                .load_user_session()
+                .unwrap_or_default();
 
-            if watchlist.is_empty() {
+            if session.watchlist.is_empty() {
                 self.watchlist = Self::default_watchlist();
                 let _ = store_rc.borrow_mut().set_watchlist(&self.watchlist);
             } else {
-                self.watchlist = watchlist;
+                self.watchlist = session.watchlist;
             }
 
-            if let Some(interval) = interval_str.and_then(|interval| match interval.as_str() {
+            if let Some(interval) = session.interval.and_then(|interval| match interval.as_str() {
                 "raw" => Some(None),
                 s if s.ends_with('s') => s
                     .trim_end_matches('s')
@@ -195,12 +190,12 @@ impl ChartView {
                 self.apply_interval(interval, false);
             }
 
-            if let Some(idx) = range_idx_str.and_then(|r| r.parse::<usize>().ok()) {
+            if let Some(idx) = session.range_index {
                 self.apply_range_index(idx, false);
             }
 
-            if let Some(replay) = replay_str {
-                self.set_replay_mode(replay == "true");
+            if let Some(replay) = session.replay_mode {
+                self.set_replay_mode(replay);
             }
             self.hydrated = true;
         }
