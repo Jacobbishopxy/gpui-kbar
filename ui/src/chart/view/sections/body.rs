@@ -33,6 +33,9 @@ pub fn chart_body(
 
     let handle_mouse_down =
         cx.listener(|this: &mut ChartView, event: &MouseDownEvent, window, _| {
+            if this.symbol_search_open {
+                return;
+            }
             if event.button == MouseButton::Left {
                 this.dragging = true;
                 this.last_drag_position =

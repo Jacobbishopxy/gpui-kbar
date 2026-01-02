@@ -4,7 +4,7 @@ use super::ChartView;
 
 impl ChartView {
     pub(super) fn handle_scroll(&mut self, event: &ScrollWheelEvent, window: &mut Window) {
-        if self.candles.is_empty() {
+        if self.symbol_search_open || self.candles.is_empty() {
             return;
         }
         let delta = event.delta.pixel_delta(px(16.0));
@@ -23,6 +23,9 @@ impl ChartView {
     }
 
     pub(super) fn handle_hover(&mut self, event: &MouseMoveEvent, candle_count: usize) {
+        if self.symbol_search_open {
+            return;
+        }
         if let (Some(bounds), true) = (
             self.chart_bounds,
             !self.candles.is_empty() && candle_count > 0,
@@ -49,6 +52,12 @@ impl ChartView {
     }
 
     pub(super) fn handle_drag(&mut self, event: &MouseMoveEvent, window: &mut Window) {
+        if self.symbol_search_open {
+            self.dragging = false;
+            self.last_drag_position = None;
+            window.refresh();
+            return;
+        }
         if !self.dragging || self.candles.is_empty() {
             window.refresh();
             return;

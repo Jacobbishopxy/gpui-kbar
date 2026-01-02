@@ -414,6 +414,8 @@ impl Render for ChartView {
 
         let open_watchlist_search =
             _cx.listener(|this: &mut Self, _: &MouseDownEvent, window, _| {
+                this.hover_index = None;
+                this.hover_position = None;
                 let should_close = this.symbol_search_open && this.symbol_search_add_to_watchlist;
                 this.symbol_search_add_to_watchlist = true;
                 this.symbol_search_open = !should_close;

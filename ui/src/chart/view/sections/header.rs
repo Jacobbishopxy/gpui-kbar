@@ -10,6 +10,8 @@ pub fn header_controls(
     let toggle_symbol_search =
         cx.listener(|this: &mut ChartView, _: &MouseDownEvent, window, _| {
             let was_open = this.symbol_search_open && !this.symbol_search_add_to_watchlist;
+            this.hover_index = None;
+            this.hover_position = None;
             this.symbol_search_add_to_watchlist = false;
             this.symbol_search_open = !was_open;
             this.interval_select_open = false;
