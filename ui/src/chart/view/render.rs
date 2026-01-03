@@ -3,7 +3,7 @@ use std::{path::Path, sync::Arc};
 use core::{Candle, Interval};
 use gpui::{
     Context, Div, MouseButton, MouseDownEvent, MouseMoveEvent, Render, SharedString, Window, div,
-    prelude::*, px, rgb,
+    prelude::*, px, rgb, rgba,
 };
 use time::macros::format_description;
 
@@ -20,6 +20,7 @@ use super::sections::watchlist::watchlist_panel;
 use super::state::QUICK_RANGE_WINDOWS;
 use super::widgets::{header_chip, header_icon, stat_row, toolbar_button};
 use super::{ChartView, INTERVAL_TRIGGER_WIDTH, TOOLBAR_WIDTH, padded_bounds};
+use crate::components::loading_sand::loading_sand;
 
 const INTERVAL_OPTIONS: &[(Option<Interval>, &str)] = &[
     (None, "raw"),
@@ -55,6 +56,7 @@ struct RenderState {
     change_color: u32,
     symbol_label: String,
     price_display: String,
+    debug_loading: bool,
     tooltip: Option<Div>,
 }
 
@@ -157,6 +159,7 @@ impl RenderState {
         let price_display = last_close
             .map(|v| format!("{v:.2}"))
             .unwrap_or_else(|| "--".to_string());
+        let debug_loading = view.debug_loading_active();
 
         Self {
             interval_label,
@@ -178,6 +181,7 @@ impl RenderState {
             change_color,
             symbol_label,
             price_display,
+            debug_loading,
             tooltip,
         }
     }
@@ -277,6 +281,33 @@ fn build_header_bar(
             .child("Replay")
     };
 
+    let trigger_debug_loader =
+        cx.listener(|this: &mut ChartView, _: &MouseDownEvent, window, _| {
+            this.start_debug_loading();
+            window.refresh();
+        });
+    let mut debug_loader_button = div()
+        .flex()
+        .items_center()
+        .gap_2()
+        .px_3()
+        .py_2()
+        .rounded_md()
+        .border_1()
+        .border_color(if state.debug_loading {
+            rgb(0xf59e0b)
+        } else {
+            rgb(0x1f2937)
+        })
+        .bg(rgb(0x111827))
+        .text_sm()
+        .text_color(gpui::white())
+        .on_mouse_down(MouseButton::Left, trigger_debug_loader)
+        .child("Debug load");
+    if state.debug_loading {
+        debug_loader_button = debug_loader_button.child(loading_sand(16.0, rgb(0xf59e0b)));
+    }
+
     let header_left = div()
         .flex()
         .items_center()
@@ -293,6 +324,7 @@ fn build_header_bar(
         .gap_2()
         .child(header_chip("Log"))
         .child(header_chip("Auto"))
+        .child(debug_loader_button)
         .child(
             div()
                 .px_3()
@@ -474,6 +506,10 @@ fn build_layered_view(
         layered = layered.child(tip);
     }
 
+    if let Some(loading_overlay) = build_loading_overlay(view, cx) {
+        layered = layered.child(loading_overlay);
+    }
+
     let clear_hover = cx.listener(
         |this: &mut ChartView, event: &MouseMoveEvent, window: &mut Window, _| {
             if this.symbol_search_open {
@@ -507,6 +543,46 @@ fn build_layered_view(
     );
 
     layered.on_mouse_move(clear_hover)
+}
+
+fn build_loading_overlay(view: &ChartView, cx: &mut Context<ChartView>) -> Option<Div> {
+    let symbol = view.loading_symbol.as_deref()?;
+    let block_input = cx.listener(|_: &mut ChartView, _: &MouseDownEvent, _, cx| {
+        cx.stop_propagation();
+    });
+
+    Some(
+        div()
+            .absolute()
+            .left(px(0.))
+            .top(px(0.))
+            .w_full()
+            .h_full()
+            .bg(rgba(0x0b122080))
+            .flex()
+            .items_center()
+            .justify_center()
+            .on_mouse_down(MouseButton::Left, block_input)
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_3()
+                    .px_4()
+                    .py_3()
+                    .bg(rgb(0x0b1220))
+                    .border_1()
+                    .border_color(rgb(0x1f2937))
+                    .rounded_md()
+                    .child(loading_sand(32.0, rgb(0xf59e0b)))
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(gpui::white())
+                            .child(format!("Loading {symbol}...")),
+                    ),
+            ),
+    )
 }
 
 fn build_interval_menu(view: &mut ChartView, cx: &mut Context<ChartView>) -> Option<Div> {

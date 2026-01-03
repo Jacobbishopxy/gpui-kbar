@@ -4,6 +4,7 @@ use std::{
     path::{Path, PathBuf},
     rc::Rc,
     sync::Arc,
+    time::{Duration as StdDuration, Instant},
 };
 
 use core::{Candle, Interval, LoadOptions, bounds, load_csv, resample};
@@ -27,6 +28,7 @@ pub const QUICK_RANGE_WINDOWS: [(&str, Option<Duration>); 8] = [
     ("5Y", Some(Duration::days(365 * 5))),
     ("ALL", None),
 ];
+const DEBUG_LOADING_DURATION: StdDuration = StdDuration::from_secs(3);
 
 pub struct ChartView {
     pub(super) base_candles: Arc<[Candle]>,
@@ -48,6 +50,7 @@ pub struct ChartView {
     pub(super) interval_select_open: bool,
     pub(super) symbol_search_open: bool,
     pub(super) symbol_search_add_to_watchlist: bool,
+    pub(super) debug_loading_until: Option<Instant>,
     active_range_index: usize,
     replay_mode: bool,
     pub loading_symbol: Option<String>,
@@ -93,6 +96,7 @@ impl ChartView {
             interval_select_open: false,
             symbol_search_open: false,
             symbol_search_add_to_watchlist: false,
+            debug_loading_until: None,
             active_range_index: QUICK_RANGE_WINDOWS.len().saturating_sub(1),
             replay_mode: false,
             loading_symbol: None,
@@ -128,6 +132,21 @@ impl ChartView {
 
     pub fn replay_enabled(&self) -> bool {
         self.replay_mode
+    }
+
+    pub(super) fn start_debug_loading(&mut self) {
+        self.debug_loading_until = Some(Instant::now() + DEBUG_LOADING_DURATION);
+    }
+
+    pub(super) fn debug_loading_active(&mut self) -> bool {
+        if let Some(until) = self.debug_loading_until {
+            if Instant::now() >= until {
+                self.debug_loading_until = None;
+                return false;
+            }
+            return true;
+        }
+        false
     }
 
     pub fn watchlist_symbols(&self) -> Vec<String> {
