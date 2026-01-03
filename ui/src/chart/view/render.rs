@@ -2,8 +2,8 @@ use std::{path::Path, sync::Arc};
 
 use core::{Candle, Interval};
 use gpui::{
-    Context, Div, MouseButton, MouseDownEvent, MouseMoveEvent, Render, SharedString, Window, div,
-    prelude::*, px, rgb, rgba,
+    Context, Div, MouseButton, MouseDownEvent, Render, SharedString, Window, div, prelude::*, px,
+    rgb,
 };
 use time::macros::format_description;
 
@@ -15,11 +15,13 @@ use super::super::{
 use super::context::format_price_range;
 use super::sections::body::chart_body;
 use super::sections::header::header_controls;
-use super::sections::sidebar::sidebar;
-use super::sections::watchlist::watchlist_panel;
+use super::sections::layout::{
+    build_body_layout, build_interval_menu, build_layered_view, build_loading_overlay,
+    build_sidebar_panels,
+};
 use super::state::QUICK_RANGE_WINDOWS;
-use super::widgets::{header_chip, header_icon, stat_row, toolbar_button};
-use super::{ChartView, INTERVAL_TRIGGER_WIDTH, TOOLBAR_WIDTH, padded_bounds};
+use super::widgets::{header_chip, header_icon};
+use super::{ChartView, INTERVAL_TRIGGER_WIDTH, padded_bounds};
 use crate::components::loading_sand::loading_sand;
 
 const INTERVAL_OPTIONS: &[(Option<Interval>, &str)] = &[
@@ -36,28 +38,28 @@ const INTERVAL_OPTIONS: &[(Option<Interval>, &str)] = &[
     (Some(Interval::Day(1)), "1d"),
 ];
 
-struct RenderState {
-    interval_label: SharedString,
-    playback_label: SharedString,
-    timezone_label: SharedString,
-    candles: Arc<[Candle]>,
-    volume_candles: Arc<[Candle]>,
-    candle_count: usize,
-    price_labels: [String; 3],
-    start_label: String,
-    mid_label: String,
-    end_label: String,
-    price_min: f64,
-    price_max: f64,
-    range_text: SharedString,
-    hover_local: Option<usize>,
-    hover_y: Option<f32>,
-    change_display: String,
-    change_color: u32,
-    symbol_label: String,
-    price_display: String,
-    debug_loading: bool,
-    tooltip: Option<Div>,
+pub(crate) struct RenderState {
+    pub(crate) interval_label: SharedString,
+    pub(crate) playback_label: SharedString,
+    pub(crate) timezone_label: SharedString,
+    pub(crate) candles: Arc<[Candle]>,
+    pub(crate) volume_candles: Arc<[Candle]>,
+    pub(crate) candle_count: usize,
+    pub(crate) price_labels: [String; 3],
+    pub(crate) start_label: String,
+    pub(crate) mid_label: String,
+    pub(crate) end_label: String,
+    pub(crate) price_min: f64,
+    pub(crate) price_max: f64,
+    pub(crate) range_text: SharedString,
+    pub(crate) hover_local: Option<usize>,
+    pub(crate) hover_y: Option<f32>,
+    pub(crate) change_display: String,
+    pub(crate) change_color: u32,
+    pub(crate) symbol_label: String,
+    pub(crate) price_display: String,
+    pub(crate) debug_loading: bool,
+    pub(crate) tooltip: Option<Div>,
 }
 
 impl RenderState {
@@ -195,7 +197,20 @@ impl Render for ChartView {
         let footer = build_footer_bar(self, _cx, &state);
         let sidebar = build_sidebar_panels(self, _cx, &state);
         let body = build_body_layout(chart_area, sidebar);
-        build_layered_view(self, _cx, header, body, footer, search_overlay, state)
+        let interval_menu = build_interval_menu(self, _cx, INTERVAL_OPTIONS);
+        let loading_overlay = build_loading_overlay(self, _cx);
+        let tooltip = state.tooltip;
+        build_layered_view(
+            self,
+            _cx,
+            header,
+            body,
+            footer,
+            search_overlay,
+            interval_menu,
+            tooltip,
+            loading_overlay,
+        )
     }
 }
 
@@ -379,273 +394,4 @@ fn build_footer_bar(view: &mut ChartView, cx: &mut Context<ChartView>, state: &R
         state.playback_label.clone(),
         state.timezone_label.clone(),
     )
-}
-
-fn build_sidebar_panels(
-    view: &mut ChartView,
-    cx: &mut Context<ChartView>,
-    state: &RenderState,
-) -> Div {
-    let watchlist_panel = watchlist_panel(view, cx);
-    let instrument_card = instrument_card(state);
-    let trading_stub = trading_stub();
-    sidebar(watchlist_panel, instrument_card, trading_stub)
-}
-
-fn instrument_card(state: &RenderState) -> Div {
-    div()
-        .bg(rgb(0x0b1220))
-        .border_1()
-        .border_color(rgb(0x1f2937))
-        .rounded_md()
-        .p_3()
-        .flex()
-        .flex_col()
-        .gap_2()
-        .child(
-            div()
-                .text_sm()
-                .text_color(rgb(0x9ca3af))
-                .child("Instrument"),
-        )
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .gap_3()
-                .child(
-                    div()
-                        .text_2xl()
-                        .text_color(gpui::white())
-                        .child(state.price_display.clone()),
-                )
-                .child(
-                    div()
-                        .text_sm()
-                        .text_color(rgb(state.change_color))
-                        .child(state.change_display.clone()),
-                ),
-        )
-        .child(stat_row("Symbol", state.symbol_label.clone()))
-        .child(stat_row("Interval", state.interval_label.to_string()))
-        .child(stat_row("Candles", state.candle_count.to_string()))
-        .child(stat_row("Range", state.range_text.to_string()))
-}
-
-fn build_body_layout(chart_area: Div, sidebar: Div) -> Div {
-    let left_toolbar = build_left_toolbar();
-    let main_column = div()
-        .flex()
-        .flex_col()
-        .flex_1()
-        .gap_3()
-        .p_3()
-        .child(chart_area);
-
-    div()
-        .flex()
-        .flex_1()
-        .w_full()
-        .min_h(px(560.))
-        .child(left_toolbar)
-        .child(main_column)
-        .child(sidebar)
-}
-
-fn build_root_container(header: Div, body: Div, footer: Div) -> Div {
-    div()
-        .flex()
-        .flex_col()
-        .w_full()
-        .h_full()
-        .relative()
-        .bg(rgb(0x0b1220))
-        .text_color(gpui::white())
-        .child(header)
-        .child(body)
-        .child(footer)
-}
-
-fn build_layered_view(
-    view: &mut ChartView,
-    cx: &mut Context<ChartView>,
-    header: Div,
-    body: Div,
-    footer: Div,
-    search_overlay: Option<Div>,
-    state: RenderState,
-) -> Div {
-    let root = build_root_container(header, body, footer);
-    let track_root = cx.processor(
-        |this: &mut ChartView, bounds: Vec<gpui::Bounds<gpui::Pixels>>, _, _| {
-            if let Some(root_bounds) = bounds.first() {
-                this.root_origin = (
-                    f32::from(root_bounds.origin.x),
-                    f32::from(root_bounds.origin.y),
-                );
-            }
-        },
-    );
-
-    let mut layered = div()
-        .relative()
-        .w_full()
-        .h_full()
-        .on_children_prepainted(track_root)
-        .child(root);
-
-    if let Some(overlay) = search_overlay {
-        layered = layered.child(overlay);
-    }
-
-    if let Some(menu) = build_interval_menu(view, cx) {
-        layered = layered.child(menu);
-    }
-
-    if let Some(tip) = state.tooltip {
-        layered = layered.child(tip);
-    }
-
-    if let Some(loading_overlay) = build_loading_overlay(view, cx) {
-        layered = layered.child(loading_overlay);
-    }
-
-    let clear_hover = cx.listener(
-        |this: &mut ChartView, event: &MouseMoveEvent, window: &mut Window, _| {
-            if this.symbol_search_open {
-                if this.hover_index.is_some() || this.hover_position.is_some() {
-                    this.hover_index = None;
-                    this.hover_position = None;
-                    window.refresh();
-                }
-                return;
-            }
-
-            let should_clear = match this.chart_bounds {
-                Some(bounds) => {
-                    let bx = f32::from(bounds.origin.x);
-                    let by = f32::from(bounds.origin.y);
-                    let bw = f32::from(bounds.size.width);
-                    let bh = f32::from(bounds.size.height);
-                    let px = f32::from(event.position.x);
-                    let py = f32::from(event.position.y);
-                    px < bx || px > bx + bw || py < by || py > by + bh
-                }
-                None => true,
-            };
-
-            if should_clear && (this.hover_index.is_some() || this.hover_position.is_some()) {
-                this.hover_index = None;
-                this.hover_position = None;
-                window.refresh();
-            }
-        },
-    );
-
-    layered.on_mouse_move(clear_hover)
-}
-
-fn build_loading_overlay(view: &ChartView, cx: &mut Context<ChartView>) -> Option<Div> {
-    let symbol = view.loading_symbol.as_deref()?;
-    let block_input = cx.listener(|_: &mut ChartView, _: &MouseDownEvent, _, cx| {
-        cx.stop_propagation();
-    });
-
-    Some(
-        div()
-            .absolute()
-            .left(px(0.))
-            .top(px(0.))
-            .w_full()
-            .h_full()
-            .bg(rgba(0x0b122080))
-            .flex()
-            .items_center()
-            .justify_center()
-            .on_mouse_down(MouseButton::Left, block_input)
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_3()
-                    .px_4()
-                    .py_3()
-                    .bg(rgb(0x0b1220))
-                    .border_1()
-                    .border_color(rgb(0x1f2937))
-                    .rounded_md()
-                    .child(loading_sand(32.0, rgb(0xf59e0b)))
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(gpui::white())
-                            .child(format!("Loading {symbol}...")),
-                    ),
-            ),
-    )
-}
-
-fn build_interval_menu(view: &mut ChartView, cx: &mut Context<ChartView>) -> Option<Div> {
-    if !view.interval_select_open {
-        return None;
-    }
-
-    let origin = (
-        view.interval_trigger_origin.0 - view.root_origin.0,
-        view.interval_trigger_origin.1 - view.root_origin.1,
-    );
-    super::overlays::interval_menu::interval_menu(
-        view,
-        cx,
-        INTERVAL_OPTIONS,
-        origin,
-        view.interval_trigger_height,
-        INTERVAL_TRIGGER_WIDTH,
-    )
-}
-
-fn build_left_toolbar() -> Div {
-    let items = [
-        "Cursor", "Trend", "Fib", "Brush", "Text", "Measure", "Zoom", "Cross",
-    ];
-    let mut left_toolbar = div()
-        .w(px(TOOLBAR_WIDTH))
-        .bg(rgb(0x0f172a))
-        .border_r_1()
-        .border_color(rgb(0x1f2937))
-        .py_3()
-        .flex()
-        .flex_col()
-        .items_center()
-        .gap_2();
-    for (idx, item) in items.iter().enumerate() {
-        left_toolbar = left_toolbar.child(toolbar_button(*item, idx == 0));
-    }
-    left_toolbar
-}
-
-fn trading_stub() -> Div {
-    div()
-        .child(
-            div()
-                .text_sm()
-                .text_color(gpui::white())
-                .child("Trading panel"),
-        )
-        .child(
-            div()
-                .text_xs()
-                .text_color(rgb(0x9ca3af))
-                .child("Order ticket and positions will appear here."),
-        )
-        .child(
-            div()
-                .px_3()
-                .py_2()
-                .rounded_md()
-                .bg(rgb(0x2563eb))
-                .text_sm()
-                .text_color(gpui::white())
-                .child("Open panel"),
-        )
 }
