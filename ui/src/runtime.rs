@@ -3,13 +3,15 @@ use gpui::{
     App, Bounds, Context, Render, Window, WindowBounds, WindowOptions, div, prelude::*, px, rgb,
     size,
 };
-use std::{cell::RefCell, rc::Rc};
+use std::sync::{Arc, Mutex};
 
 use crate::store::default_store;
 use crate::{ChartMeta, ChartView, application_with_assets};
 
 pub fn launch_runtime() {
     application_with_assets().run(|cx: &mut App| {
+        gpui_component::init(cx);
+
         let bounds = Bounds::centered(None, size(px(1400.), px(900.)), cx);
         cx.open_window(
             WindowOptions {
@@ -26,14 +28,14 @@ pub fn launch_runtime() {
 
 struct RuntimeView {
     chart: gpui::Entity<ChartView>,
-    store: Option<Rc<RefCell<core::DuckDbStore>>>,
+    store: Option<Arc<Mutex<core::DuckDbStore>>>,
     restored: bool,
 }
 
 impl RuntimeView {
     fn new(cx: &mut Context<Self>) -> Self {
         let store = default_store();
-        let store_rc = store.map(|s| Rc::new(RefCell::new(s)));
+        let store_arc = store;
 
         let default_source = "AAPL".to_string();
         let chart = cx.new(|_| {
@@ -43,12 +45,12 @@ impl RuntimeView {
                     source: default_source,
                     initial_interval: None,
                 },
-                store_rc.clone(),
+                store_arc.clone(),
             )
         });
         Self {
             chart,
-            store: store_rc,
+            store: store_arc,
             restored: false,
         }
     }
@@ -61,29 +63,24 @@ impl RuntimeView {
         cx: &mut Context<Self>,
         persist_session: bool,
     ) {
-        if persist_session {
-            if let Some(store) = &self.store {
-                let _ = store.borrow_mut().write_candles(&source, &candles);
-                let _ = store
-                    .borrow_mut()
-                    .set_session_value("active_source", &source);
-                let interval = self.chart.update(cx, |chart, _| {
-                    ChartView::interval_label(chart.current_interval())
-                });
-                let _ = store
-                    .borrow_mut()
-                    .set_session_value("interval", interval.as_str());
-                let range = self
-                    .chart
-                    .update(cx, |chart, _| chart.current_range_index().to_string());
-                let _ = store.borrow_mut().set_session_value("range_index", &range);
-                let replay = self.chart.update(cx, |chart, _| chart.replay_enabled());
-                let _ = store
-                    .borrow_mut()
-                    .set_session_value("replay_mode", if replay { "true" } else { "false" });
-            }
+        if persist_session
+            && let Some(store) = &self.store
+            && let Ok(guard) = store.lock()
+        {
+            let _ = guard.write_candles(&source, &candles);
+            let _ = guard.set_session_value("active_source", &source);
+            let interval = self.chart.update(cx, |chart, _| {
+                ChartView::interval_label(chart.current_interval())
+            });
+            let _ = guard.set_session_value("interval", interval.as_str());
+            let range = self
+                .chart
+                .update(cx, |chart, _| chart.current_range_index().to_string());
+            let _ = guard.set_session_value("range_index", &range);
+            let replay = self.chart.update(cx, |chart, _| chart.replay_enabled());
+            let _ = guard.set_session_value("replay_mode", if replay { "true" } else { "false" });
         }
-        let _ = self.chart.update(cx, |chart, cx| {
+        self.chart.update(cx, |chart, cx| {
             chart.replace_data(candles, source, persist_session, persist_session);
             cx.notify();
         });
@@ -99,15 +96,15 @@ impl RuntimeView {
             return;
         };
 
-        let session = store.borrow().load_user_session().ok();
+        let session = store.lock().ok().and_then(|s| s.load_user_session().ok());
         let cached = session.as_ref().and_then(|session| {
             session.active_source.as_deref().and_then(|source| {
-                store
-                    .borrow()
-                    .load_candles(source, None)
-                    .ok()
-                    .filter(|c| !c.is_empty())
-                    .map(|candles| (source.to_string(), candles))
+                store.lock().ok().and_then(|s| {
+                    s.load_candles(source, None)
+                        .ok()
+                        .filter(|c| !c.is_empty())
+                        .map(|candles| (source.to_string(), candles))
+                })
             })
         });
 
@@ -123,7 +120,7 @@ impl Render for RuntimeView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.restore_session(_window, cx);
         // Hydrate per-view state from store once per render cycle if not loaded yet.
-        let _ = self.chart.update(cx, |chart, _| chart.hydrate_from_store());
+        self.chart.update(cx, |chart, _| chart.hydrate_from_store());
 
         let chart_area = div()
             .flex_1()

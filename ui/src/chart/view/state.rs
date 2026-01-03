@@ -1,9 +1,7 @@
 use std::{
-    cell::RefCell,
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     path::{Path, PathBuf},
-    rc::Rc,
-    sync::Arc,
+    sync::{Arc, Mutex},
     time::{Duration as StdDuration, Instant},
 };
 
@@ -30,6 +28,80 @@ pub const QUICK_RANGE_WINDOWS: [(&str, Option<Duration>); 8] = [
 ];
 const DEBUG_LOADING_DURATION: StdDuration = StdDuration::from_secs(3);
 
+struct LoadResult {
+    symbol: String,
+    base: Arc<[Candle]>,
+    resamples: Vec<(Option<Interval>, Arc<[Candle]>)>,
+}
+
+fn collect_resample_intervals(
+    interval_at_start: Option<Interval>,
+    cache: &[(Option<Interval>, Arc<[Candle]>)],
+) -> Vec<Option<Interval>> {
+    let mut seen = HashSet::new();
+    let mut intervals = Vec::new();
+
+    if seen.insert(None) {
+        intervals.push(None);
+    }
+
+    if let Some(interval) = interval_at_start {
+        if seen.insert(Some(interval)) {
+            intervals.push(Some(interval));
+        }
+    }
+
+    for (interval, _) in cache {
+        if seen.insert(*interval) {
+            intervals.push(*interval);
+        }
+    }
+
+    intervals
+}
+
+fn build_resamples(
+    base: &Arc<[Candle]>,
+    intervals: &[Option<Interval>],
+) -> Vec<(Option<Interval>, Arc<[Candle]>)> {
+    let mut seen = HashSet::new();
+    let mut resamples = Vec::new();
+
+    for interval in intervals {
+        if !seen.insert(*interval) {
+            continue;
+        }
+        match interval {
+            Some(interval) => {
+                resamples.push((Some(*interval), Arc::from(resample(base, *interval))))
+            }
+            None => resamples.push((None, base.clone())),
+        }
+    }
+
+    resamples
+}
+
+fn normalize_resamples(
+    base: &Arc<[Candle]>,
+    resamples: Vec<(Option<Interval>, Arc<[Candle]>)>,
+) -> Vec<(Option<Interval>, Arc<[Candle]>)> {
+    let mut seen = HashSet::new();
+    let mut cache = Vec::new();
+
+    for (interval, arc) in resamples {
+        if seen.insert(interval) {
+            cache.push((interval, arc));
+        }
+    }
+
+    if seen.insert(None) {
+        cache.push((None, base.clone()));
+    }
+
+    cache
+}
+
 pub struct ChartView {
     pub(super) base_candles: Arc<[Candle]>,
     pub(super) candles: Arc<[Candle]>,
@@ -55,7 +127,7 @@ pub struct ChartView {
     replay_mode: bool,
     pub loading_symbol: Option<String>,
     pub load_error: Option<String>,
-    pub store: Option<Rc<RefCell<DuckDbStore>>>,
+    pub store: Option<Arc<Mutex<DuckDbStore>>>,
     pub watchlist: Vec<String>,
     hydrated: bool,
     symbols: HashMap<String, SymbolMeta>,
@@ -68,7 +140,7 @@ impl ChartView {
     pub(crate) fn new(
         base_candles: Vec<Candle>,
         meta: ChartMeta,
-        store: Option<Rc<RefCell<DuckDbStore>>>,
+        store: Option<Arc<Mutex<DuckDbStore>>>,
     ) -> Self {
         let base_arc: Arc<[Candle]> = base_candles.into();
         let (candles, interval) = match meta.initial_interval {
@@ -190,6 +262,9 @@ impl ChartView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let interval_at_start = self.current_interval();
+        let resample_intervals =
+            collect_resample_intervals(interval_at_start, &self.resample_cache);
         self.ensure_symbol_catalog();
         if self.loading_symbol.as_deref() == Some(&symbol) {
             return;
@@ -203,27 +278,6 @@ impl ChartView {
         let source = self.resolve_symbol_source(&symbol);
         let resolved = resolve_source_path(&source);
 
-        if let Some(store_rc) = self.store.clone() {
-            let cached = {
-                let store_ref = store_rc.borrow();
-                store_ref
-                    .load_candles(&symbol, None)
-                    .ok()
-                    .filter(|c| !c.is_empty())
-            };
-            if let Some(cached) = cached {
-                self.replace_data(cached, symbol.clone(), true, add_to_watchlist);
-                self.loading_symbol = None;
-                self.load_error = None;
-                self.symbol_search_open = false;
-                let _ = store_rc
-                    .borrow_mut()
-                    .set_session_value("active_source", &symbol);
-                window.refresh();
-                return;
-            }
-        }
-
         self.loading_symbol = Some(symbol.clone());
         self.load_error = None;
         self.symbol_search_open = false;
@@ -231,14 +285,55 @@ impl ChartView {
 
         let entity = cx.entity();
         let store = self.store.clone();
+        let symbol_for_task = symbol.clone();
+        let resolved_path = resolved.clone();
         let task = cx.background_executor().spawn(async move {
-            let candles = load_csv(&resolved, LoadOptions::default())
-                .map_err(|e| format!("failed to load {symbol} from {}: {e}", resolved.display()))?;
+            if let Some(store_arc) = store.as_ref() {
+                let cached = store_arc
+                    .lock()
+                    .ok()
+                    .and_then(|guard| guard.load_candles(&symbol_for_task, None).ok())
+                    .filter(|c| !c.is_empty());
+
+                if let Some(cached) = cached {
+                    let base_arc: Arc<[Candle]> = Arc::from(cached);
+                    let resamples = build_resamples(&base_arc, &resample_intervals);
+                    if let Ok(guard) = store_arc.lock() {
+                        let _ = guard.set_session_value("active_source", &symbol_for_task);
+                    }
+                    return Ok(LoadResult {
+                        symbol: symbol_for_task,
+                        base: base_arc,
+                        resamples,
+                    });
+                }
+            }
+
+            let candles = load_csv(&resolved_path, LoadOptions::default()).map_err(|e| {
+                format!(
+                    "failed to load {symbol_for_task} from {}: {e}",
+                    resolved_path.display()
+                )
+            })?;
 
             if candles.is_empty() {
-                Err(format!("no candles loaded for {symbol}"))
+                Err(format!("no candles loaded for {symbol_for_task}"))
             } else {
-                Ok((symbol, candles))
+                let base_arc: Arc<[Candle]> = Arc::from(candles);
+                let resamples = build_resamples(&base_arc, &resample_intervals);
+                if let Some(store_arc) = store.as_ref() {
+                    if let Ok(guard) = store_arc.lock() {
+                        guard
+                            .write_candles(&symbol_for_task, base_arc.as_ref())
+                            .map_err(|e| format!("failed to persist {symbol_for_task}: {e}"))?;
+                        let _ = guard.set_session_value("active_source", &symbol_for_task);
+                    }
+                }
+                Ok(LoadResult {
+                    symbol: symbol_for_task,
+                    base: base_arc,
+                    resamples,
+                })
             }
         });
 
@@ -247,20 +342,19 @@ impl ChartView {
                 let result = task.await;
                 async_cx
                     .update(|window, app| {
-                        let _ = entity.update(app, |view, cx| {
+                        entity.update(app, |view, cx| {
                             view.loading_symbol = None;
                             match result {
-                                Ok((symbol, candles)) => {
+                                Ok(LoadResult {
+                                    symbol,
+                                    base,
+                                    resamples,
+                                }) => {
                                     view.load_error = None;
-                                    if let Some(store) = store.as_ref() {
-                                        let _ = store.borrow_mut().write_candles(&symbol, &candles);
-                                        let _ = store
-                                            .borrow_mut()
-                                            .set_session_value("active_source", &symbol);
-                                    }
-                                    view.replace_data(
-                                        candles,
-                                        symbol.clone(),
+                                    view.replace_data_from_load(
+                                        base,
+                                        resamples,
+                                        symbol,
                                         true,
                                         add_to_watchlist,
                                     );
@@ -282,8 +376,12 @@ impl ChartView {
         if self.hydrated {
             return;
         }
-        if let Some(store_rc) = self.store.clone() {
-            let session = store_rc.borrow().load_user_session().unwrap_or_default();
+        if let Some(store_arc) = self.store.clone() {
+            let session = store_arc
+                .lock()
+                .ok()
+                .and_then(|s| s.load_user_session().ok())
+                .unwrap_or_default();
 
             self.watchlist = session.watchlist;
 
@@ -345,8 +443,10 @@ impl ChartView {
     pub fn add_to_watchlist(&mut self, symbol: String) {
         if !self.watchlist.iter().any(|s| s == &symbol) {
             self.watchlist.push(symbol.clone());
-            if let Some(store) = &self.store {
-                let _ = store.borrow_mut().set_watchlist(&self.watchlist);
+            if let Some(store) = &self.store
+                && let Ok(guard) = store.lock()
+            {
+                let _ = guard.set_watchlist(&self.watchlist);
             }
         }
     }
@@ -416,21 +516,65 @@ impl ChartView {
         persist_session: bool,
         add_to_watchlist: bool,
     ) {
-        let base_arc: Arc<[Candle]> = base.into();
-        self.base_candles = base_arc.clone();
-        self.resample_cache.clear();
-        self.resample_cache.push((None, base_arc.clone()));
+        self.replace_data_precomputed(base, None, source, persist_session, add_to_watchlist);
+    }
+
+    pub(crate) fn replace_data_from_load(
+        &mut self,
+        base: Arc<[Candle]>,
+        resamples: Vec<(Option<Interval>, Arc<[Candle]>)>,
+        source: String,
+        persist_session: bool,
+        add_to_watchlist: bool,
+    ) {
+        let cache = normalize_resamples(&base, resamples);
         let interval = self.interval;
-        self.apply_interval(interval, persist_session);
+        self.base_candles = base.clone();
+        self.resample_cache = cache;
+        let next_candles = self
+            .resample_cache
+            .iter()
+            .find(|(cached_interval, _)| *cached_interval == interval)
+            .map(|(_, arc)| arc.clone())
+            .unwrap_or_else(|| self.resampled_for(interval));
+
+        self.candles = next_candles;
+        self.interval = interval;
+        self.apply_range_index(self.active_range_index, persist_session);
+
         self.source = source;
         self.load_error = None;
         self.loading_symbol = None;
+
         if add_to_watchlist {
             self.add_to_watchlist(self.source.clone());
         }
         if persist_session {
             let _ = self.persist_session("active_source", &self.source);
+            let _ = self.persist_session("interval", &Self::interval_label(self.interval));
         }
+    }
+
+    pub(crate) fn replace_data_precomputed(
+        &mut self,
+        base: Vec<Candle>,
+        pre_resampled: Option<(Option<Interval>, Arc<[Candle]>)>,
+        source: String,
+        persist_session: bool,
+        add_to_watchlist: bool,
+    ) {
+        let base_arc: Arc<[Candle]> = base.into();
+        let mut resamples = vec![(None, base_arc.clone())];
+        if let Some(pre) = pre_resampled {
+            resamples.push(pre);
+        }
+        self.replace_data_from_load(
+            base_arc,
+            resamples,
+            source,
+            persist_session,
+            add_to_watchlist,
+        );
     }
 
     pub(super) fn apply_range_index(&mut self, index: usize, persist: bool) {
@@ -483,21 +627,19 @@ impl ChartView {
 
     fn persist_session(&self, key: &str, value: &str) -> Result<(), ()> {
         if let Some(store) = &self.store {
-            store
-                .borrow_mut()
-                .set_session_value(key, value)
-                .map_err(|_| ())?;
+            let guard = store.lock().map_err(|_| ())?;
+            guard.set_session_value(key, value).map_err(|_| ())?;
         }
         Ok(())
     }
 
     pub(super) fn persist_viewport(&self) -> Result<(), ()> {
         if let Some(store) = &self.store {
-            let store = store.borrow_mut();
-            store
+            let guard = store.lock().map_err(|_| ())?;
+            guard
                 .set_session_value("view_offset", &self.view_offset.to_string())
                 .map_err(|_| ())?;
-            store
+            guard
                 .set_session_value("zoom", &self.zoom.to_string())
                 .map_err(|_| ())?;
         }
@@ -527,10 +669,11 @@ impl ChartView {
     pub fn remove_from_watchlist(&mut self, symbol: &str) {
         let len_before = self.watchlist.len();
         self.watchlist.retain(|s| s != symbol);
-        if len_before != self.watchlist.len() {
-            if let Some(store) = &self.store {
-                let _ = store.borrow_mut().set_watchlist(&self.watchlist);
-            }
+        if len_before != self.watchlist.len()
+            && let Some(store) = &self.store
+            && let Ok(guard) = store.lock()
+        {
+            let _ = guard.set_watchlist(&self.watchlist);
         }
     }
 }

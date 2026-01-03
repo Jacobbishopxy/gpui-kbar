@@ -33,20 +33,12 @@ impl Default for ColumnMapping {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct LoadOptions {
     pub columns: ColumnMapping,
 }
 
-impl Default for LoadOptions {
-    fn default() -> Self {
-        Self {
-            columns: ColumnMapping::default(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Interval {
     Second(u32),
     Minute(u32),

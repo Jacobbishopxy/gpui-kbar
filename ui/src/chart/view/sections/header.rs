@@ -21,13 +21,13 @@ pub fn header_controls(
         });
 
     let search_label = if view.candles.is_empty() {
-        "Search symbols".to_string()
+        "Search".to_string()
     } else {
         Path::new(&view.source)
             .file_name()
             .and_then(|s| s.to_str())
             .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| view.source.as_str())
+            .unwrap_or(view.source.as_str())
             .to_string()
     };
 

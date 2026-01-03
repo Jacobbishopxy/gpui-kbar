@@ -156,7 +156,7 @@ impl RenderState {
             .file_name()
             .and_then(|s| s.to_str())
             .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| view.source.as_str())
+            .unwrap_or(view.source.as_str())
             .to_string();
         let price_display = last_close
             .map(|v| format!("{v:.2}"))
@@ -191,6 +191,11 @@ impl RenderState {
 
 impl Render for ChartView {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        // Keep animation frames flowing while the blocking overlay is visible.
+        if self.loading_symbol.is_some() {
+            _window.request_animation_frame();
+        }
+
         let state = RenderState::from_view(self);
         let chart_area = build_chart_area(self, _cx, &state);
         let (header, search_overlay) = build_header_bar(self, _cx, &state);

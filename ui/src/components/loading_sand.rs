@@ -1,44 +1,69 @@
 use std::{panic::Location, time::Duration};
 
-use gpui::{Animation, AnimationExt, Div, ElementId, Rgba, div, prelude::*, px, svg};
+use gpui::{
+    Animation, AnimationExt, Div, ElementId, Hsla, Rgba, Transformation, div, percentage,
+    prelude::*, px, svg,
+};
+use gpui_component::{Sizable, Size as ComponentSize, spinner::Spinner};
 
 const FLIP_DURATION: Duration = Duration::from_millis(1200);
 const HOLD_PORTION: f32 = 0.35;
 const DIM_FACTOR: f32 = 0.92;
+const SPINNER_OPACITY: f32 = 0.75;
+const SPINNER_SCALE: f32 = 0.9;
 
 #[track_caller]
 pub fn loading_sand(size: f32, color: Rgba) -> impl IntoElement {
     let animation = Animation::new(FLIP_DURATION).repeat();
     let id = ElementId::CodeLocation(*Location::caller());
     let dimmed = dim_color(color, DIM_FACTOR);
+    let spinner_color = Hsla::from(color).opacity(SPINNER_OPACITY);
+    let spinner_size = ComponentSize::Size(px(size * SPINNER_SCALE));
 
     div().w(px(size)).h(px(size)).relative().with_animation(
         id,
         animation,
         move |this: Div, delta| {
             let (frame_one, frame_two) = frame_opacities(delta.clamp(0.0, 1.0));
-            this.child(
-                svg()
+            let rotation = Transformation::rotate(percentage(delta));
+            let mut this = this.child(
+                div()
                     .absolute()
                     .left(px(0.))
                     .top(px(0.))
-                    .path("time-sand-1.svg")
                     .w(px(size))
                     .h(px(size))
-                    .text_color(color)
-                    .opacity(frame_one),
-            )
-            .child(
-                svg()
-                    .absolute()
-                    .left(px(0.))
-                    .top(px(0.))
-                    .path("time-sand-2.svg")
-                    .w(px(size))
-                    .h(px(size))
-                    .text_color(dimmed)
-                    .opacity(frame_two),
-            )
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(Spinner::new().with_size(spinner_size).color(spinner_color)),
+            );
+            this = this
+                .child(
+                    svg()
+                        .absolute()
+                        .left(px(0.))
+                        .top(px(0.))
+                        .path("time-sand-1.svg")
+                        .w(px(size))
+                        .h(px(size))
+                        .text_color(color)
+                        .with_transformation(rotation)
+                        .opacity(frame_one),
+                )
+                .child(
+                    svg()
+                        .absolute()
+                        .left(px(0.))
+                        .top(px(0.))
+                        .path("time-sand-2.svg")
+                        .w(px(size))
+                        .h(px(size))
+                        .text_color(dimmed)
+                        .with_transformation(rotation)
+                        .opacity(frame_two),
+                );
+            this
         },
     )
 }
