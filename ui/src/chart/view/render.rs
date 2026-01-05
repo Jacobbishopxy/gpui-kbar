@@ -193,7 +193,9 @@ impl Render for ChartView {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         // Keep animation frames flowing while the blocking overlay is visible.
         if self.loading_symbol.is_some() {
+            println!("[render] loading_symbol set; requesting animation frame");
             _window.request_animation_frame();
+            _window.refresh();
         }
 
         let state = RenderState::from_view(self);

@@ -6,10 +6,14 @@ use std::{
 };
 
 use core::{Candle, Interval, LoadOptions, bounds, load_csv, resample};
-use gpui::{Bounds, Context, Pixels, SharedString, Window};
+use gpui::{
+    App, AsyncWindowContext, Bounds, Context, EventEmitter, Pixels, SharedString, Subscription,
+    Window,
+};
 use time::Duration;
 
 use super::super::ChartMeta;
+use crate::components::loading_sand::reset_frame_logs;
 use crate::data::{
     symbols::{SymbolMeta, load_symbols},
     universe::{SymbolSearchEntry, load_universe},
@@ -27,11 +31,39 @@ pub const QUICK_RANGE_WINDOWS: [(&str, Option<Duration>); 8] = [
     ("ALL", None),
 ];
 const DEBUG_LOADING_DURATION: StdDuration = StdDuration::from_secs(3);
+const USE_LOADING_FRAME_PUMP: bool = true; // Test 3: guarded pump
+const USE_LOADING_TIMER_REFRESH: bool = false; // Test 3: disable timer refresh
 
+#[derive(Clone)]
 struct LoadResult {
     symbol: String,
     base: Arc<[Candle]>,
     resamples: Vec<(Option<Interval>, Arc<[Candle]>)>,
+}
+
+#[derive(Clone)]
+enum LoadMsg {
+    Start {
+        symbol: String,
+        add_to_watchlist: bool,
+    },
+    Finished {
+        load_id: u64,
+        symbol: String,
+        started_at: Instant,
+        add_to_watchlist: bool,
+        result: Result<LoadResult, String>,
+    },
+}
+
+struct PersistSnapshot {
+    store: Option<Arc<Mutex<DuckDbStore>>>,
+    source: String,
+    interval_label: String,
+    range_index: usize,
+    view_offset: f32,
+    zoom: f32,
+    watchlist: Vec<String>,
 }
 
 fn collect_resample_intervals(
@@ -129,6 +161,9 @@ pub struct ChartView {
     pub load_error: Option<String>,
     pub store: Option<Arc<Mutex<DuckDbStore>>>,
     pub watchlist: Vec<String>,
+    load_events: Option<Subscription>,
+    active_load_seq: u64,
+    pump_active: bool,
     hydrated: bool,
     symbols: HashMap<String, SymbolMeta>,
     symbol_search_filter: String,
@@ -175,6 +210,9 @@ impl ChartView {
             load_error: None,
             store,
             watchlist: Vec::new(),
+            load_events: None,
+            active_load_seq: 0,
+            pump_active: false,
             hydrated: false,
             symbols: HashMap::new(),
             symbol_search_filter: "All".to_string(),
@@ -262,114 +300,301 @@ impl ChartView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let interval_at_start = self.current_interval();
-        let resample_intervals =
-            collect_resample_intervals(interval_at_start, &self.resample_cache);
-        self.ensure_symbol_catalog();
-        if self.loading_symbol.as_deref() == Some(&symbol) {
-            return;
-        }
-        if self.source == symbol {
-            self.symbol_search_open = false;
-            window.refresh();
-            return;
-        }
-
-        let source = self.resolve_symbol_source(&symbol);
-        let resolved = resolve_source_path(&source);
-
-        self.loading_symbol = Some(symbol.clone());
-        self.load_error = None;
-        self.symbol_search_open = false;
-        window.refresh();
-
-        let entity = cx.entity();
-        let store = self.store.clone();
-        let symbol_for_task = symbol.clone();
-        let resolved_path = resolved.clone();
-        let task = cx.background_executor().spawn(async move {
-            if let Some(store_arc) = store.as_ref() {
-                let cached = store_arc
-                    .lock()
-                    .ok()
-                    .and_then(|guard| guard.load_candles(&symbol_for_task, None).ok())
-                    .filter(|c| !c.is_empty());
-
-                if let Some(cached) = cached {
-                    let base_arc: Arc<[Candle]> = Arc::from(cached);
-                    let resamples = build_resamples(&base_arc, &resample_intervals);
-                    if let Ok(guard) = store_arc.lock() {
-                        let _ = guard.set_session_value("active_source", &symbol_for_task);
-                    }
-                    return Ok(LoadResult {
-                        symbol: symbol_for_task,
-                        base: base_arc,
-                        resamples,
-                    });
-                }
-            }
-
-            let candles = load_csv(&resolved_path, LoadOptions::default()).map_err(|e| {
-                format!(
-                    "failed to load {symbol_for_task} from {}: {e}",
-                    resolved_path.display()
-                )
-            })?;
-
-            if candles.is_empty() {
-                Err(format!("no candles loaded for {symbol_for_task}"))
-            } else {
-                let base_arc: Arc<[Candle]> = Arc::from(candles);
-                let resamples = build_resamples(&base_arc, &resample_intervals);
-                if let Some(store_arc) = store.as_ref() {
-                    if let Ok(guard) = store_arc.lock() {
-                        guard
-                            .write_candles(&symbol_for_task, base_arc.as_ref())
-                            .map_err(|e| format!("failed to persist {symbol_for_task}: {e}"))?;
-                        let _ = guard.set_session_value("active_source", &symbol_for_task);
-                    }
-                }
-                Ok(LoadResult {
-                    symbol: symbol_for_task,
-                    base: base_arc,
-                    resamples,
-                })
-            }
+        self.ensure_load_subscription(window, cx);
+        cx.emit(LoadMsg::Start {
+            symbol,
+            add_to_watchlist,
         });
+    }
 
-        window
-            .spawn(cx, async move |async_cx| {
-                let result = task.await;
-                async_cx
-                    .update(|window, app| {
-                        entity.update(app, |view, cx| {
-                            view.loading_symbol = None;
-                            match result {
-                                Ok(LoadResult {
-                                    symbol,
-                                    base,
-                                    resamples,
-                                }) => {
-                                    view.load_error = None;
-                                    view.replace_data_from_load(
-                                        base,
+    fn ensure_load_subscription(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.load_events.is_some() {
+            return;
+        }
+        let entity = cx.entity();
+        let subscription =
+            cx.subscribe_in(&entity, window, |this, _, event: &LoadMsg, window, cx| {
+                this.handle_load_event(event, window, cx);
+            });
+        self.load_events = Some(subscription);
+    }
+
+    fn handle_load_event(&mut self, event: &LoadMsg, window: &mut Window, cx: &mut Context<Self>) {
+        match event {
+            LoadMsg::Start {
+                symbol,
+                add_to_watchlist,
+            } => {
+                let interval_at_start = self.current_interval();
+                let resample_intervals =
+                    collect_resample_intervals(interval_at_start, &self.resample_cache);
+                self.ensure_symbol_catalog();
+                if self.loading_symbol.as_deref() == Some(symbol) {
+                    return;
+                }
+                if self.source == *symbol {
+                    self.symbol_search_open = false;
+                    window.refresh();
+                    return;
+                }
+
+                let source = self.resolve_symbol_source(symbol);
+                let resolved = resolve_source_path(&source);
+
+                reset_frame_logs();
+                let load_id = self.active_load_seq.wrapping_add(1);
+                self.active_load_seq = load_id;
+                self.loading_symbol = Some(symbol.clone());
+                self.load_error = None;
+                self.symbol_search_open = false;
+                let started_at = Instant::now();
+                window.refresh();
+                if USE_LOADING_FRAME_PUMP && !self.pump_active {
+                    self.pump_active = true;
+                    start_loading_frame_pump(window, cx.entity());
+                }
+                if USE_LOADING_TIMER_REFRESH {
+                    start_loading_timer_refresh(window, cx, cx.entity(), load_id);
+                }
+
+                let entity = cx.entity();
+                let store = self.store.clone();
+                let resample_intervals = resample_intervals.clone();
+                let symbol_for_logs = symbol.clone();
+                let symbol_for_task = symbol.clone();
+                let resolved_path = resolved.clone();
+                let add_to_watchlist = *add_to_watchlist;
+
+                println!(
+                    "[load] window.spawn scheduling symbol={} at {:?}",
+                    symbol_for_logs, started_at
+                );
+
+                window
+                    .spawn(cx, async move |async_cx| {
+                        let task = async_cx.background_executor().spawn(async move {
+                            if let Some(store_arc) = store.as_ref() {
+                                let cached = store_arc
+                                    .lock()
+                                    .ok()
+                                    .and_then(|guard| guard.load_candles(&symbol_for_task, None).ok())
+                                    .filter(|c| !c.is_empty());
+
+                                if let Some(cached) = cached {
+                                    let base_arc: Arc<[Candle]> = Arc::from(cached);
+                                    let resamples = build_resamples(&base_arc, &resample_intervals);
+                                    if let Ok(guard) = store_arc.lock() {
+                                        let _ = guard.set_session_value("active_source", &symbol_for_task);
+                                    }
+                                    return Ok(LoadResult {
+                                        symbol: symbol_for_task.clone(),
+                                        base: base_arc,
                                         resamples,
-                                        symbol,
-                                        true,
-                                        add_to_watchlist,
-                                    );
-                                    cx.notify();
-                                }
-                                Err(msg) => {
-                                    view.load_error = Some(msg);
+                                    });
                                 }
                             }
-                            window.refresh();
+
+                            let candles = load_csv(&resolved_path, LoadOptions::default()).map_err(
+                                |e| {
+                                    format!(
+                                        "failed to load {symbol_for_task} from {}: {e}",
+                                        resolved_path.display()
+                                    )
+                                },
+                            )?;
+
+                            if candles.is_empty() {
+                                Err(format!("no candles loaded for {symbol_for_task}"))
+                            } else {
+                                let base_arc: Arc<[Candle]> = Arc::from(candles);
+                                let resamples = build_resamples(&base_arc, &resample_intervals);
+                                if let Some(store_arc) = store.as_ref() {
+                                    if let Ok(guard) = store_arc.lock() {
+                                        guard
+                                            .write_candles(&symbol_for_task, base_arc.as_ref())
+                                            .map_err(|e| {
+                                                format!(
+                                                    "failed to persist {symbol_for_task}: {e}"
+                                                )
+                                            })?;
+                                        let _ = guard.set_session_value(
+                                            "active_source",
+                                            &symbol_for_task,
+                                        );
+                                    }
+                                }
+                                Ok(LoadResult {
+                                    symbol: symbol_for_task.clone(),
+                                    base: base_arc,
+                                    resamples,
+                                })
+                            }
                         });
+
+                        let mut result = task.await;
+                        let bg = async_cx.background_executor().clone();
+                        let desired_interval = async_cx
+                            .update(|_, app| entity.update(app, |view, _| view.current_interval()))
+                            .ok()
+                            .flatten();
+
+                        if let Ok(ref mut loaded) = result {
+                            println!(
+                                "[load] pre-resample cache intervals for {}: {:?}",
+                                symbol_for_logs,
+                                loaded
+                                    .resamples
+                                    .iter()
+                                    .map(|(i, _)| *i)
+                                    .collect::<Vec<_>>()
+                            );
+                            if let Some(interval) = desired_interval {
+                                let missing = !loaded
+                                    .resamples
+                                    .iter()
+                                    .any(|(cached, _)| *cached == Some(interval));
+                                if missing {
+                                    let base = loaded.base.clone();
+                                    println!(
+                                        "[load] precomputing missing interval {:?} for {} on background",
+                                        interval, symbol_for_logs
+                                    );
+                                    let resample_task = bg.spawn(async move {
+                                        let start = Instant::now();
+                                        let out = Arc::from(resample(&base, interval));
+                                        println!(
+                                            "[load] background resample {:?} done in {:?}",
+                                            interval,
+                                            start.elapsed()
+                                        );
+                                        (Some(interval), out)
+                                    });
+                                    let extra = resample_task.await;
+                                    loaded.resamples.push(extra);
+                                    println!(
+                                        "[load] cache intervals after add for {}: {:?}",
+                                        symbol_for_logs,
+                                        loaded
+                                            .resamples
+                                            .iter()
+                                            .map(|(i, _)| *i)
+                                            .collect::<Vec<_>>()
+                                    );
+                                }
+                            }
+                        }
+
+                        println!(
+                            "[load] window.spawn completed symbol={} after {:?}",
+                            symbol_for_logs,
+                            started_at.elapsed()
+                        );
+
+                        async_cx
+                            .update(|window, app| {
+                                entity.update(app, |_, cx| {
+                                    cx.emit(LoadMsg::Finished {
+                                        load_id,
+                                        symbol: symbol_for_logs.clone(),
+                                        started_at,
+                                        add_to_watchlist,
+                                        result: result.clone(),
+                                    });
+                                });
+                                window.refresh();
+                            })
+                            .ok();
                     })
-                    .ok();
-            })
-            .detach();
+                    .detach();
+            }
+            LoadMsg::Finished {
+                load_id,
+                symbol,
+                started_at,
+                add_to_watchlist,
+                result,
+            } => {
+                if *load_id != self.active_load_seq {
+                    println!(
+                        "[load] ignoring finished load for {} (active_load_seq={}, finished_load_id={})",
+                        symbol, self.active_load_seq, load_id
+                    );
+                    return;
+                }
+
+                let ui_hop_start = Instant::now();
+                let mut persist_snapshot: Option<PersistSnapshot> = None;
+                match result.clone() {
+                    Ok(LoadResult {
+                        symbol,
+                        base,
+                        resamples,
+                    }) => {
+                        self.load_error = None;
+                        let loaded_symbol = symbol.clone();
+                        let swap_start = Instant::now();
+                        self.replace_data_from_load(
+                            base,
+                            resamples,
+                            symbol,
+                            false,
+                            *add_to_watchlist,
+                        );
+                        println!(
+                            "[load] replace_data_from_load + apply_range_index UI time for {}: {:?}",
+                            loaded_symbol,
+                            swap_start.elapsed()
+                        );
+                        persist_snapshot = Some(PersistSnapshot {
+                            store: self.store.clone(),
+                            source: self.source.clone(),
+                            interval_label: ChartView::interval_label(self.interval).to_string(),
+                            range_index: self.active_range_index,
+                            view_offset: self.view_offset,
+                            zoom: self.zoom,
+                            watchlist: self.watchlist.clone(),
+                        });
+                        cx.notify();
+                    }
+                    Err(msg) => {
+                        self.load_error = Some(msg);
+                    }
+                }
+                self.loading_symbol = None;
+                self.pump_active = false;
+
+                if let Some(snapshot) = persist_snapshot {
+                    let bg = cx.background_executor().clone();
+                    bg.spawn(async move {
+                        if let Some(store) = snapshot.store {
+                            if let Ok(guard) = store.lock() {
+                                let _ = guard.set_session_value("active_source", &snapshot.source);
+                                let _ =
+                                    guard.set_session_value("interval", &snapshot.interval_label);
+                                let _ = guard.set_session_value(
+                                    "range_index",
+                                    &snapshot.range_index.to_string(),
+                                );
+                                let _ = guard.set_session_value(
+                                    "view_offset",
+                                    &snapshot.view_offset.to_string(),
+                                );
+                                let _ = guard.set_session_value("zoom", &snapshot.zoom.to_string());
+                                let _ = guard.set_watchlist(&snapshot.watchlist);
+                            }
+                        }
+                    })
+                    .detach();
+                }
+                println!(
+                    "[load] UI hop (entity.update) for {} took {:?} (total {:?})",
+                    symbol,
+                    ui_hop_start.elapsed(),
+                    started_at.elapsed()
+                );
+                window.refresh();
+            }
+        }
     }
 
     pub fn hydrate_from_store(&mut self) {
@@ -441,14 +666,21 @@ impl ChartView {
     }
 
     pub fn add_to_watchlist(&mut self, symbol: String) {
-        if !self.watchlist.iter().any(|s| s == &symbol) {
-            self.watchlist.push(symbol.clone());
+        if self.add_to_watchlist_local(symbol.clone()) {
             if let Some(store) = &self.store
                 && let Ok(guard) = store.lock()
             {
                 let _ = guard.set_watchlist(&self.watchlist);
             }
         }
+    }
+
+    fn add_to_watchlist_local(&mut self, symbol: String) -> bool {
+        if self.watchlist.iter().any(|s| s == &symbol) {
+            return false;
+        }
+        self.watchlist.push(symbol);
+        true
     }
 
     pub(super) fn visible_len(&self) -> f32 {
@@ -547,7 +779,11 @@ impl ChartView {
         self.loading_symbol = None;
 
         if add_to_watchlist {
-            self.add_to_watchlist(self.source.clone());
+            if persist_session {
+                self.add_to_watchlist(self.source.clone());
+            } else {
+                self.add_to_watchlist_local(self.source.clone());
+            }
         }
         if persist_session {
             let _ = self.persist_session("active_source", &self.source);
@@ -676,6 +912,68 @@ impl ChartView {
             let _ = guard.set_watchlist(&self.watchlist);
         }
     }
+}
+
+impl EventEmitter<LoadMsg> for ChartView {}
+
+fn start_loading_frame_pump(window: &mut Window, entity: gpui::Entity<ChartView>) {
+    window.on_next_frame(move |window, app| {
+        let mut still_loading = false;
+        entity.update(app, |view, _| {
+            still_loading = view.loading_symbol.is_some();
+        });
+        if still_loading {
+            window.refresh();
+            start_loading_frame_pump(window, entity.clone());
+        } else {
+            entity.update(app, |view, _| {
+                view.pump_active = false;
+            });
+        }
+    });
+}
+
+fn start_loading_timer_refresh(
+    window: &mut Window,
+    cx: &mut Context<ChartView>,
+    entity: gpui::Entity<ChartView>,
+    load_id: u64,
+) {
+    window
+        .spawn(cx, {
+            move |async_cx: &mut AsyncWindowContext| {
+                let handle = entity.downgrade();
+                let bg = async_cx.background_executor().clone();
+                let mut timer_cx = async_cx.clone();
+                async move {
+                    loop {
+                        // ~60fps cadence
+                        bg.timer(StdDuration::from_millis(16)).await;
+                        let should_continue = timer_cx
+                            .update(|window: &mut Window, app: &mut App| {
+                                let still_loading = handle
+                                    .upgrade()
+                                    .map(|entity| {
+                                        entity.update(app, |view, _| {
+                                            view.loading_symbol.is_some()
+                                                && view.active_load_seq == load_id
+                                        })
+                                    })
+                                    .unwrap_or(false);
+                                if still_loading {
+                                    window.refresh();
+                                }
+                                still_loading
+                            })
+                            .unwrap_or(false);
+                        if !should_continue {
+                            break;
+                        }
+                    }
+                }
+            }
+        })
+        .detach();
 }
 
 pub fn padded_bounds(candles: &[Candle]) -> (f64, f64) {
