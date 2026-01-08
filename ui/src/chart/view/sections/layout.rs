@@ -11,7 +11,6 @@ use crate::chart::view::{
     widgets::{stat_row, toolbar_button},
 };
 use crate::components::loading_sand::loading_sand;
-use crate::logging::log_loading;
 
 use super::sidebar::sidebar;
 use super::watchlist::watchlist_panel;
@@ -144,7 +143,6 @@ pub(crate) fn build_layered_view(
 
 pub(crate) fn build_loading_overlay(view: &ChartView, cx: &mut Context<ChartView>) -> Option<Div> {
     let symbol = view.loading_symbol.as_deref()?;
-    log_loading(format!("[loading_overlay] rendering overlay for {symbol}"));
     let block_input = cx.listener(|_: &mut ChartView, _: &MouseDownEvent, _, cx| {
         cx.stop_propagation();
     });

@@ -7,8 +7,7 @@ use gpui::{
     prelude::*, px, quad, rgb, rgba, size, transparent_black,
 };
 use ui::application_with_assets;
-use ui::components::loading_sand::{frame_log_count, loading_sand, reset_frame_logs};
-use ui::logging::log_loading;
+use ui::components::loading_sand::loading_sand;
 
 const WINDOW_WIDTH: f32 = 900.0;
 const WINDOW_HEIGHT: f32 = 600.0;
@@ -41,15 +40,9 @@ impl HeavyPaintRepro {
         if self.loading {
             return;
         }
-        reset_frame_logs();
         let load_id = LOAD_SEQ.fetch_add(1, Ordering::Relaxed) + 1;
         self.load_id = load_id;
         self.loading = true;
-        log_loading(format!(
-            "[heavy-repro] start load_id={} frame_logs={}",
-            load_id,
-            frame_log_count()
-        ));
         window.refresh();
 
         let entity = cx.entity();
@@ -65,11 +58,6 @@ impl HeavyPaintRepro {
                         .await;
                     let _ = owned_cx.update(|window: &mut Window, app: &mut App| {
                         entity.update(app, |view, _| view.loading = false);
-                        log_loading(format!(
-                            "[heavy-repro] finish load_id={} frame_logs={}",
-                            load_id,
-                            frame_log_count()
-                        ));
                         window.refresh();
                     });
                 }

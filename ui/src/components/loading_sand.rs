@@ -1,8 +1,4 @@
-use std::{
-    panic::Location,
-    sync::atomic::{AtomicU32, Ordering},
-    time::Duration,
-};
+use std::{panic::Location, time::Duration};
 
 use gpui::{
     Animation, AnimationExt, Div, ElementId, Hsla, Rgba, Transformation, div, percentage,
@@ -10,25 +6,11 @@ use gpui::{
 };
 use gpui_component::{Sizable, Size as ComponentSize, spinner::Spinner};
 
-use crate::logging::log_loading;
-
 const FLIP_DURATION: Duration = Duration::from_millis(1200);
 const HOLD_PORTION: f32 = 0.35;
 const DIM_FACTOR: f32 = 0.92;
 const SPINNER_OPACITY: f32 = 0.75;
 const SPINNER_SCALE: f32 = 0.9;
-static FRAME_LOGS: AtomicU32 = AtomicU32::new(0);
-const FRAME_LOG_CAP: u32 = u32::MAX;
-
-/// Reset the logging counter so we can see fresh animation ticks.
-pub fn reset_frame_logs() {
-    FRAME_LOGS.store(0, Ordering::Relaxed);
-}
-
-/// Current number of logged animation ticks.
-pub fn frame_log_count() -> u32 {
-    FRAME_LOGS.load(Ordering::Relaxed)
-}
 
 #[track_caller]
 pub fn loading_sand(size: f32, color: Rgba) -> impl IntoElement {
@@ -44,18 +26,6 @@ pub fn loading_sand(size: f32, color: Rgba) -> impl IntoElement {
         move |this: Div, delta| {
             let (frame_one, frame_two) = frame_opacities(delta.clamp(0.0, 1.0));
             let rotation = Transformation::rotate(percentage(delta));
-            let n = FRAME_LOGS.fetch_add(1, Ordering::Relaxed);
-            if n < FRAME_LOG_CAP {
-                log_loading(format!(
-                    "[loading_sand] animation tick delta={:.3} frame_log_count={}",
-                    delta,
-                    FRAME_LOGS.load(Ordering::Relaxed)
-                ));
-            } else if n == FRAME_LOG_CAP {
-                log_loading(format!(
-                    "[loading_sand] animation tick log cap reached ({FRAME_LOG_CAP})"
-                ));
-            }
             let mut this = this.child(
                 div()
                     .absolute()

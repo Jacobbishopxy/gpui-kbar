@@ -190,7 +190,6 @@ fn start_loading_pump(window: &mut Window, entity: gpui::Entity<DevView>) {
             still_loading = view.loading;
         });
         if still_loading {
-            println!("[dev] pump tick; refreshing window");
             window.refresh();
             start_loading_pump(window, entity.clone());
         } else {

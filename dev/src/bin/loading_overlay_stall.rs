@@ -7,7 +7,6 @@ use gpui::{
 };
 use ui::application_with_assets;
 use ui::components::loading_sand::loading_sand;
-use ui::logging::log_loading;
 
 const WINDOW_WIDTH: f32 = 420.0;
 const WINDOW_HEIGHT: f32 = 260.0;
@@ -43,17 +42,11 @@ impl StallReproView {
         self.load_id = load_id;
         self.loading = true;
         self.dirty_counter = 0;
-        log_loading(format!(
-            "[stall-repro] start load_id={} pump_active_before={}",
-            load_id, self.pump_active
-        ));
         if USE_FRAME_PUMP && !self.pump_active {
             self.pump_active = true;
-            log_loading(format!("[stall-repro] pump start load_id={}", load_id));
             start_frame_pump(window, cx.entity());
         }
         if USE_TIMER_REFRESH && !self.pump_active {
-            log_loading(format!("[stall-repro] timer start load_id={}", load_id));
             start_timer_refresh(window, cx, cx.entity(), load_id);
         }
         window.refresh();
@@ -74,7 +67,6 @@ impl StallReproView {
                             view.loading = false;
                             view.pump_active = false;
                         });
-                        log_loading(format!("[stall-repro] finish load_id={load_id}"));
                         window.refresh();
                     });
                 }
@@ -90,10 +82,6 @@ impl Render for StallReproView {
         });
 
         if self.loading && USE_RAF_IN_RENDER {
-            log_loading(format!(
-                "[stall-repro] render load_id={} raf+refresh dirty_counter={}",
-                self.load_id, self.dirty_counter
-            ));
             window.request_animation_frame();
             window.refresh();
         }
@@ -183,21 +171,13 @@ impl Render for StallReproView {
 fn start_frame_pump(window: &mut Window, entity: gpui::Entity<StallReproView>) {
     window.on_next_frame(move |window, app| {
         let mut still_loading = false;
-        let mut load_id = 0;
-        let mut dirty_counter = 0;
         entity.update(app, |view, _| {
             still_loading = view.loading;
-            load_id = view.load_id;
             if still_loading {
                 view.dirty_counter = view.dirty_counter.saturating_add(1);
-                dirty_counter = view.dirty_counter;
             }
         });
         if still_loading {
-            log_loading(format!(
-                "[stall-repro] pump tick load_id={} dirty_counter={}",
-                load_id, dirty_counter
-            ));
             window.refresh();
             start_frame_pump(window, entity.clone());
         } else {
@@ -210,7 +190,7 @@ fn start_timer_refresh(
     window: &mut Window,
     cx: &mut GpuiContext<StallReproView>,
     entity: gpui::Entity<StallReproView>,
-    load_id: u64,
+    _load_id: u64,
 ) {
     window
         .spawn(cx, move |async_cx: &mut AsyncWindowContext| {
@@ -227,7 +207,6 @@ fn start_timer_refresh(
                         .update(|window: &mut Window, app: &mut App| {
                             let still_loading = entity.update(app, |view, _| view.loading);
                             if still_loading {
-                                log_loading(format!("[stall-repro] timer tick load_id={load_id}"));
                                 window.refresh();
                             }
                             still_loading
