@@ -5,16 +5,29 @@ use gpui::{
     BorderStyle, Bounds, Canvas, PathBuilder, canvas, point, px, quad, rgb, size, transparent_black,
 };
 
+#[derive(Clone)]
+pub(super) struct CandleViewport {
+    candles: Arc<[Candle]>,
+    start: usize,
+    end: usize,
+}
+
 pub(super) fn chart_canvas(
     candles: Arc<[Candle]>,
+    start: usize,
+    end: usize,
     price_min: f64,
     price_max: f64,
     hover_local: Option<usize>,
     hover_y: Option<f32>,
-) -> Canvas<Arc<[Candle]>> {
+) -> Canvas<CandleViewport> {
     canvas(
-        move |_, _, _| candles.clone(),
-        move |bounds, candles, window, _| {
+        move |_, _, _| CandleViewport {
+            candles: candles.clone(),
+            start,
+            end,
+        },
+        move |bounds, viewport, window, _| {
             window.paint_quad(quad(
                 bounds,
                 px(0.),
@@ -28,7 +41,14 @@ pub(super) fn chart_canvas(
             let height = f32::from(bounds.size.height);
             let ox = f32::from(bounds.origin.x);
             let oy = f32::from(bounds.origin.y);
-            if candles.is_empty() || height <= 0.0 || width <= 0.0 {
+            if viewport.candles.is_empty() || height <= 0.0 || width <= 0.0 {
+                return;
+            }
+
+            let start = viewport.start.min(viewport.candles.len());
+            let end = viewport.end.min(viewport.candles.len()).max(start);
+            let candles = &viewport.candles[start..end];
+            if candles.is_empty() {
                 return;
             }
 
@@ -116,11 +136,17 @@ pub(super) fn chart_canvas(
 
 pub(super) fn volume_canvas(
     candles: Arc<[Candle]>,
+    start: usize,
+    end: usize,
     hover_local: Option<usize>,
-) -> Canvas<Arc<[Candle]>> {
+) -> Canvas<CandleViewport> {
     canvas(
-        move |_, _, _| candles.clone(),
-        move |bounds, candles, window, _| {
+        move |_, _, _| CandleViewport {
+            candles: candles.clone(),
+            start,
+            end,
+        },
+        move |bounds, viewport, window, _| {
             window.paint_quad(quad(
                 bounds,
                 px(0.),
@@ -134,7 +160,14 @@ pub(super) fn volume_canvas(
             let height = f32::from(bounds.size.height);
             let ox = f32::from(bounds.origin.x);
             let oy = f32::from(bounds.origin.y);
-            if candles.is_empty() || height <= 0.0 || width <= 0.0 {
+            if viewport.candles.is_empty() || height <= 0.0 || width <= 0.0 {
+                return;
+            }
+
+            let start = viewport.start.min(viewport.candles.len());
+            let end = viewport.end.min(viewport.candles.len()).max(start);
+            let candles = &viewport.candles[start..end];
+            if candles.is_empty() {
                 return;
             }
 

@@ -47,7 +47,8 @@ pub(crate) struct RenderState {
     pub(crate) playback_label: SharedString,
     pub(crate) timezone_label: SharedString,
     pub(crate) candles: Arc<[Candle]>,
-    pub(crate) volume_candles: Arc<[Candle]>,
+    pub(crate) visible_start: usize,
+    pub(crate) visible_end: usize,
     pub(crate) candle_count: usize,
     pub(crate) price_labels: [String; 3],
     pub(crate) start_label: String,
@@ -84,10 +85,14 @@ impl RenderState {
                 .unwrap_or_else(|| "UTC".to_string()),
         );
 
-        let (start, end) = view.visible_range();
+        let (mut start, mut end) = view.visible_range();
+        end = end.min(view.candles.len());
+        start = start.min(end);
         let visible = if start < end {
             &view.candles[start..end]
         } else {
+            start = 0;
+            end = view.candles.len();
             &view.candles[..]
         };
         let candle_count = visible.len();
@@ -128,8 +133,7 @@ impl RenderState {
             })
             .unwrap_or_else(|| "---".into());
 
-        let candles: Arc<[Candle]> = Arc::from(visible.to_vec());
-        let volume_candles = candles.clone();
+        let candles = view.candles.clone();
         let hover_local = view.hover_index.and_then(|idx| {
             if start <= idx && idx < end {
                 Some(idx - start)
@@ -172,7 +176,8 @@ impl RenderState {
             playback_label,
             timezone_label,
             candles,
-            volume_candles,
+            visible_start: start,
+            visible_end: end,
             candle_count,
             price_labels,
             start_label,
@@ -237,6 +242,8 @@ impl Render for ChartView {
 fn build_chart_area(view: &mut ChartView, cx: &mut Context<ChartView>, state: &RenderState) -> Div {
     let chart = chart_canvas(
         state.candles.clone(),
+        state.visible_start,
+        state.visible_end,
         state.price_min,
         state.price_max,
         state.hover_local,
@@ -245,10 +252,15 @@ fn build_chart_area(view: &mut ChartView, cx: &mut Context<ChartView>, state: &R
     .flex_1()
     .w_full()
     .h_full();
-    let volume = volume_canvas(state.volume_candles.clone(), state.hover_local)
-        .flex_1()
-        .w_full()
-        .h_full();
+    let volume = volume_canvas(
+        state.candles.clone(),
+        state.visible_start,
+        state.visible_end,
+        state.hover_local,
+    )
+    .flex_1()
+    .w_full()
+    .h_full();
 
     chart_body(
         view,
