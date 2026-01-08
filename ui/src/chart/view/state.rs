@@ -1,23 +1,24 @@
 use std::{
     collections::{HashMap, HashSet},
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU32, AtomicU64, Ordering},
+    },
     time::{Duration as StdDuration, Instant},
 };
 
 use core::{Candle, Interval, LoadOptions, bounds, load_csv, resample};
-use gpui::{
-    App, AsyncWindowContext, Bounds, Context, EventEmitter, Pixels, SharedString, Subscription,
-    Window,
-};
+use gpui::{App, Bounds, Context, EventEmitter, Pixels, SharedString, Subscription, Window};
 use time::Duration;
 
 use super::super::ChartMeta;
-use crate::components::loading_sand::reset_frame_logs;
+use crate::components::loading_sand::{frame_log_count, reset_frame_logs};
 use crate::data::{
     symbols::{SymbolMeta, load_symbols},
     universe::{SymbolSearchEntry, load_universe},
 };
+use crate::logging::log_loading;
 use core::DuckDbStore;
 
 pub const QUICK_RANGE_WINDOWS: [(&str, Option<Duration>); 8] = [
@@ -32,7 +33,17 @@ pub const QUICK_RANGE_WINDOWS: [(&str, Option<Duration>); 8] = [
 ];
 const DEBUG_LOADING_DURATION: StdDuration = StdDuration::from_secs(3);
 const USE_LOADING_FRAME_PUMP: bool = true; // Test 3: guarded pump
-const USE_LOADING_TIMER_REFRESH: bool = false; // Test 3: disable timer refresh
+const USE_LOADING_TIMER_REFRESH: bool = true; // Enable UI-driven timer refresh to keep paints flowing
+const PUMP_LOG_EVERY: u32 = 1;
+const TIMER_LOG_EVERY: u32 = 30;
+pub(super) const RENDER_LOG_LIMIT: u32 = 120;
+
+static PUMP_LOG_COUNT: AtomicU32 = AtomicU32::new(0);
+static PUMP_LOG_LOAD_ID: AtomicU64 = AtomicU64::new(0);
+static TIMER_LOG_COUNT: AtomicU32 = AtomicU32::new(0);
+static TIMER_LOG_LOAD_ID: AtomicU64 = AtomicU64::new(0);
+pub(super) static RENDER_LOG_COUNT: AtomicU32 = AtomicU32::new(0);
+pub(super) static RENDER_LOG_LOAD_ID: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone)]
 struct LoadResult {
@@ -162,8 +173,10 @@ pub struct ChartView {
     pub store: Option<Arc<Mutex<DuckDbStore>>>,
     pub watchlist: Vec<String>,
     load_events: Option<Subscription>,
-    active_load_seq: u64,
+    pub active_load_seq: u64,
     pump_active: bool,
+    loading_frame_counter: u64,
+    pub loading_dirty_toggle: bool,
     hydrated: bool,
     symbols: HashMap<String, SymbolMeta>,
     symbol_search_filter: String,
@@ -213,6 +226,8 @@ impl ChartView {
             load_events: None,
             active_load_seq: 0,
             pump_active: false,
+            loading_frame_counter: 0,
+            loading_dirty_toggle: false,
             hydrated: false,
             symbols: HashMap::new(),
             symbol_search_filter: "All".to_string(),
@@ -344,16 +359,33 @@ impl ChartView {
                 reset_frame_logs();
                 let load_id = self.active_load_seq.wrapping_add(1);
                 self.active_load_seq = load_id;
+                reset_loading_logs(load_id);
                 self.loading_symbol = Some(symbol.clone());
+                self.loading_frame_counter = 0;
                 self.load_error = None;
                 self.symbol_search_open = false;
                 let started_at = Instant::now();
+                log_loading(format!(
+                    "[load] start load_id={} symbol={} pump_active_before={} frame_logs={}",
+                    load_id,
+                    symbol,
+                    self.pump_active,
+                    frame_log_count()
+                ));
                 window.refresh();
                 if USE_LOADING_FRAME_PUMP && !self.pump_active {
                     self.pump_active = true;
+                    log_loading(format!(
+                        "[pump] start load_id={} symbol={}",
+                        load_id, symbol
+                    ));
                     start_loading_frame_pump(window, cx.entity());
                 }
                 if USE_LOADING_TIMER_REFRESH {
+                    log_loading(format!(
+                        "[timer] start load_id={} symbol={}",
+                        load_id, symbol
+                    ));
                     start_loading_timer_refresh(window, cx, cx.entity(), load_id);
                 }
 
@@ -365,10 +397,10 @@ impl ChartView {
                 let resolved_path = resolved.clone();
                 let add_to_watchlist = *add_to_watchlist;
 
-                println!(
+                log_loading(format!(
                     "[load] window.spawn scheduling symbol={} at {:?}",
                     symbol_for_logs, started_at
-                );
+                ));
 
                 window
                     .spawn(cx, async move |async_cx| {
@@ -439,7 +471,7 @@ impl ChartView {
                             .flatten();
 
                         if let Ok(ref mut loaded) = result {
-                            println!(
+                            log_loading(format!(
                                 "[load] pre-resample cache intervals for {}: {:?}",
                                 symbol_for_logs,
                                 loaded
@@ -447,7 +479,7 @@ impl ChartView {
                                     .iter()
                                     .map(|(i, _)| *i)
                                     .collect::<Vec<_>>()
-                            );
+                            ));
                             if let Some(interval) = desired_interval {
                                 let missing = !loaded
                                     .resamples
@@ -455,23 +487,23 @@ impl ChartView {
                                     .any(|(cached, _)| *cached == Some(interval));
                                 if missing {
                                     let base = loaded.base.clone();
-                                    println!(
+                                    log_loading(format!(
                                         "[load] precomputing missing interval {:?} for {} on background",
                                         interval, symbol_for_logs
-                                    );
+                                    ));
                                     let resample_task = bg.spawn(async move {
                                         let start = Instant::now();
                                         let out = Arc::from(resample(&base, interval));
-                                        println!(
+                                        log_loading(format!(
                                             "[load] background resample {:?} done in {:?}",
                                             interval,
                                             start.elapsed()
-                                        );
+                                        ));
                                         (Some(interval), out)
                                     });
                                     let extra = resample_task.await;
                                     loaded.resamples.push(extra);
-                                    println!(
+                                    log_loading(format!(
                                         "[load] cache intervals after add for {}: {:?}",
                                         symbol_for_logs,
                                         loaded
@@ -479,16 +511,16 @@ impl ChartView {
                                             .iter()
                                             .map(|(i, _)| *i)
                                             .collect::<Vec<_>>()
-                                    );
+                                    ));
                                 }
                             }
                         }
 
-                        println!(
+                        log_loading(format!(
                             "[load] window.spawn completed symbol={} after {:?}",
                             symbol_for_logs,
                             started_at.elapsed()
-                        );
+                        ));
 
                         async_cx
                             .update(|window, app| {
@@ -515,13 +547,22 @@ impl ChartView {
                 result,
             } => {
                 if *load_id != self.active_load_seq {
-                    println!(
+                    log_loading(format!(
                         "[load] ignoring finished load for {} (active_load_seq={}, finished_load_id={})",
                         symbol, self.active_load_seq, load_id
-                    );
+                    ));
                     return;
                 }
 
+                log_loading(format!(
+                    "[load] finish load_id={} symbol={} frame_logs={} pump_active_before={} loading_symbol_present={} pump_frames={}",
+                    load_id,
+                    symbol,
+                    frame_log_count(),
+                    self.pump_active,
+                    self.loading_symbol.is_some(),
+                    self.loading_frame_counter
+                ));
                 let ui_hop_start = Instant::now();
                 let mut persist_snapshot: Option<PersistSnapshot> = None;
                 match result.clone() {
@@ -540,11 +581,11 @@ impl ChartView {
                             false,
                             *add_to_watchlist,
                         );
-                        println!(
+                        log_loading(format!(
                             "[load] replace_data_from_load + apply_range_index UI time for {}: {:?}",
                             loaded_symbol,
                             swap_start.elapsed()
-                        );
+                        ));
                         persist_snapshot = Some(PersistSnapshot {
                             store: self.store.clone(),
                             source: self.source.clone(),
@@ -562,6 +603,8 @@ impl ChartView {
                 }
                 self.loading_symbol = None;
                 self.pump_active = false;
+                self.loading_frame_counter = 0;
+                clear_loading_logs();
 
                 if let Some(snapshot) = persist_snapshot {
                     let bg = cx.background_executor().clone();
@@ -586,12 +629,12 @@ impl ChartView {
                     })
                     .detach();
                 }
-                println!(
+                log_loading(format!(
                     "[load] UI hop (entity.update) for {} took {:?} (total {:?})",
                     symbol,
                     ui_hop_start.elapsed(),
                     started_at.elapsed()
-                );
+                ));
                 window.refresh();
             }
         }
@@ -916,16 +959,57 @@ impl ChartView {
 
 impl EventEmitter<LoadMsg> for ChartView {}
 
+fn reset_loading_logs(load_id: u64) {
+    PUMP_LOG_LOAD_ID.store(load_id, Ordering::Relaxed);
+    PUMP_LOG_COUNT.store(0, Ordering::Relaxed);
+    TIMER_LOG_LOAD_ID.store(load_id, Ordering::Relaxed);
+    TIMER_LOG_COUNT.store(0, Ordering::Relaxed);
+    RENDER_LOG_LOAD_ID.store(load_id, Ordering::Relaxed);
+    RENDER_LOG_COUNT.store(0, Ordering::Relaxed);
+}
+
+fn clear_loading_logs() {
+    reset_loading_logs(0);
+}
+
 fn start_loading_frame_pump(window: &mut Window, entity: gpui::Entity<ChartView>) {
     window.on_next_frame(move |window, app| {
         let mut still_loading = false;
+        let mut load_id = 0;
+        let mut symbol: Option<String> = None;
+        let mut frame_counter = 0;
         entity.update(app, |view, _| {
             still_loading = view.loading_symbol.is_some();
+            load_id = view.active_load_seq;
+            symbol = view.loading_symbol.clone();
+            if still_loading {
+                view.loading_frame_counter = view.loading_frame_counter.saturating_add(1);
+                frame_counter = view.loading_frame_counter;
+            }
         });
         if still_loading {
+            let last = PUMP_LOG_LOAD_ID.swap(load_id, Ordering::Relaxed);
+            if last != load_id {
+                PUMP_LOG_COUNT.store(0, Ordering::Relaxed);
+            }
+            let tick = PUMP_LOG_COUNT.fetch_add(1, Ordering::Relaxed);
+            if tick % PUMP_LOG_EVERY == 0 {
+                log_loading(format!(
+                    "[pump] load_id={} tick={} refresh=true loading_symbol={} loading_frames={}",
+                    load_id,
+                    tick,
+                    symbol.as_deref().unwrap_or("none"),
+                    frame_counter
+                ));
+            }
+            // Toggle a tiny state bit so the view stays dirty while loading.
+            entity.update(app, |view, _| {
+                view.loading_dirty_toggle = !view.loading_dirty_toggle;
+            });
             window.refresh();
             start_loading_frame_pump(window, entity.clone());
         } else {
+            clear_loading_logs();
             entity.update(app, |view, _| {
                 view.pump_active = false;
             });
@@ -939,41 +1023,50 @@ fn start_loading_timer_refresh(
     entity: gpui::Entity<ChartView>,
     load_id: u64,
 ) {
-    window
-        .spawn(cx, {
-            move |async_cx: &mut AsyncWindowContext| {
-                let handle = entity.downgrade();
-                let bg = async_cx.background_executor().clone();
-                let mut timer_cx = async_cx.clone();
-                async move {
-                    loop {
-                        // ~60fps cadence
-                        bg.timer(StdDuration::from_millis(16)).await;
-                        let should_continue = timer_cx
-                            .update(|window: &mut Window, app: &mut App| {
-                                let still_loading = handle
-                                    .upgrade()
-                                    .map(|entity| {
-                                        entity.update(app, |view, _| {
-                                            view.loading_symbol.is_some()
-                                                && view.active_load_seq == load_id
-                                        })
-                                    })
-                                    .unwrap_or(false);
-                                if still_loading {
-                                    window.refresh();
-                                }
-                                still_loading
-                            })
-                            .unwrap_or(false);
-                        if !should_continue {
-                            break;
-                        }
-                    }
-                }
+    let handle = entity.downgrade();
+    fn schedule(
+        window: &mut Window,
+        app: &mut App,
+        handle: &gpui::WeakEntity<ChartView>,
+        load_id: u64,
+        tick_count: &mut u32,
+    ) {
+        let still_loading = handle
+            .upgrade()
+            .map(|entity| {
+                entity.update(app, |view, _| {
+                    view.loading_symbol.is_some() && view.active_load_seq == load_id
+                })
+            })
+            .unwrap_or(false);
+        if still_loading {
+            window.refresh();
+            *tick_count += 1;
+            if *tick_count % TIMER_LOG_EVERY == 0 {
+                log_loading(format!(
+                    "[timer-ui] load_id={} tick={} refresh=true",
+                    load_id, tick_count
+                ));
             }
-        })
-        .detach();
+            let handle = handle.clone();
+            let load_id = load_id;
+            let mut tick_clone = *tick_count;
+            window.on_next_frame(move |window, app| {
+                schedule(window, app, &handle, load_id, &mut tick_clone)
+            });
+        } else {
+            log_loading(format!(
+                "[timer-ui] stop load_id={} ticks={}",
+                load_id, tick_count
+            ));
+        }
+    }
+    // Kick off the first frame.
+    let mut tick_count = 0u32;
+    let handle_clone = handle.clone();
+    window.on_next_frame(move |window, app| {
+        schedule(window, app, &handle_clone, load_id, &mut tick_count)
+    });
 }
 
 pub fn padded_bounds(candles: &[Candle]) -> (f64, f64) {

@@ -1,4 +1,7 @@
-use std::{path::Path, sync::Arc};
+use std::{
+    path::Path,
+    sync::{Arc, atomic::Ordering},
+};
 
 use core::{Candle, Interval};
 use gpui::{
@@ -19,10 +22,11 @@ use super::sections::layout::{
     build_body_layout, build_interval_menu, build_layered_view, build_loading_overlay,
     build_sidebar_panels,
 };
-use super::state::QUICK_RANGE_WINDOWS;
+use super::state::{QUICK_RANGE_WINDOWS, RENDER_LOG_COUNT, RENDER_LOG_LIMIT, RENDER_LOG_LOAD_ID};
 use super::widgets::{header_chip, header_icon};
 use super::{ChartView, INTERVAL_TRIGGER_WIDTH, padded_bounds};
 use crate::components::loading_sand::loading_sand;
+use crate::logging::log_loading;
 
 const INTERVAL_OPTIONS: &[(Option<Interval>, &str)] = &[
     (None, "raw"),
@@ -37,6 +41,10 @@ const INTERVAL_OPTIONS: &[(Option<Interval>, &str)] = &[
     (Some(Interval::Hour(1)), "1h"),
     (Some(Interval::Day(1)), "1d"),
 ];
+
+// While the blocking loading overlay is visible, avoid expensive per-frame chart rendering
+// so the spinner animation can stay smooth.
+const SKIP_CHART_RENDER_WHILE_LOADING: bool = true;
 
 pub(crate) struct RenderState {
     pub(crate) interval_label: SharedString,
@@ -192,10 +200,37 @@ impl RenderState {
 impl Render for ChartView {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         // Keep animation frames flowing while the blocking overlay is visible.
-        if self.loading_symbol.is_some() {
-            println!("[render] loading_symbol set; requesting animation frame");
+        if let Some(symbol) = self.loading_symbol.as_deref() {
+            let load_id = self.active_load_seq;
+            self.loading_dirty_toggle = !self.loading_dirty_toggle;
+            let last = RENDER_LOG_LOAD_ID.swap(load_id, Ordering::Relaxed);
+            if last != load_id {
+                RENDER_LOG_COUNT.store(0, Ordering::Relaxed);
+            }
+            let count = RENDER_LOG_COUNT.fetch_add(1, Ordering::Relaxed);
+            if count < RENDER_LOG_LIMIT {
+                log_loading(format!(
+                    "[render] load_id={} symbol={} raf+refresh request (count={})",
+                    load_id, symbol, count
+                ));
+            } else if count == RENDER_LOG_LIMIT {
+                log_loading(format!(
+                    "[render] load_id={} render log cap reached ({})",
+                    load_id, RENDER_LOG_LIMIT
+                ));
+            }
             _window.request_animation_frame();
             _window.refresh();
+
+            if SKIP_CHART_RENDER_WHILE_LOADING {
+                let loading_overlay = build_loading_overlay(self, _cx);
+                return div()
+                    .relative()
+                    .w_full()
+                    .h_full()
+                    .bg(rgb(0x0b1220))
+                    .child(loading_overlay.unwrap_or_else(|| div()));
+            }
         }
 
         let state = RenderState::from_view(self);

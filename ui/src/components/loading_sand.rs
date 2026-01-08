@@ -10,6 +10,8 @@ use gpui::{
 };
 use gpui_component::{Sizable, Size as ComponentSize, spinner::Spinner};
 
+use crate::logging::log_loading;
+
 const FLIP_DURATION: Duration = Duration::from_millis(1200);
 const HOLD_PORTION: f32 = 0.35;
 const DIM_FACTOR: f32 = 0.92;
@@ -21,6 +23,11 @@ const FRAME_LOG_CAP: u32 = u32::MAX;
 /// Reset the logging counter so we can see fresh animation ticks.
 pub fn reset_frame_logs() {
     FRAME_LOGS.store(0, Ordering::Relaxed);
+}
+
+/// Current number of logged animation ticks.
+pub fn frame_log_count() -> u32 {
+    FRAME_LOGS.load(Ordering::Relaxed)
 }
 
 #[track_caller]
@@ -39,13 +46,15 @@ pub fn loading_sand(size: f32, color: Rgba) -> impl IntoElement {
             let rotation = Transformation::rotate(percentage(delta));
             let n = FRAME_LOGS.fetch_add(1, Ordering::Relaxed);
             if n < FRAME_LOG_CAP {
-                println!(
+                log_loading(format!(
                     "[loading_sand] animation tick delta={:.3} frame_log_count={}",
                     delta,
                     FRAME_LOGS.load(Ordering::Relaxed)
-                );
+                ));
             } else if n == FRAME_LOG_CAP {
-                println!("[loading_sand] animation tick log cap reached ({FRAME_LOG_CAP})");
+                log_loading(format!(
+                    "[loading_sand] animation tick log cap reached ({FRAME_LOG_CAP})"
+                ));
             }
             let mut this = this.child(
                 div()

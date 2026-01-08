@@ -1,6 +1,7 @@
 mod assets;
 mod chart;
 pub mod components;
+pub mod logging;
 mod runtime;
 
 pub use chart::{ChartMeta, ChartView, launch_chart};
