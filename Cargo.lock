@@ -1915,6 +1915,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "dev"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "gpui",
+ "gpui-component",
+ "polars",
+ "time",
+ "ui",
+]
+
+[[package]]
 name = "digest"
 version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"

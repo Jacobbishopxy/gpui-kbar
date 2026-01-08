@@ -38,6 +38,10 @@ const INTERVAL_OPTIONS: &[(Option<Interval>, &str)] = &[
     (Some(Interval::Day(1)), "1d"),
 ];
 
+// While the blocking loading overlay is visible, avoid expensive per-frame chart rendering
+// so the spinner animation can stay smooth.
+const SKIP_CHART_RENDER_WHILE_LOADING: bool = true;
+
 pub(crate) struct RenderState {
     pub(crate) interval_label: SharedString,
     pub(crate) playback_label: SharedString,
@@ -194,6 +198,17 @@ impl Render for ChartView {
         // Keep animation frames flowing while the blocking overlay is visible.
         if self.loading_symbol.is_some() {
             _window.request_animation_frame();
+            _window.refresh();
+
+            if SKIP_CHART_RENDER_WHILE_LOADING {
+                let loading_overlay = build_loading_overlay(self, _cx);
+                return div()
+                    .relative()
+                    .w_full()
+                    .h_full()
+                    .bg(rgb(0x0b1220))
+                    .child(loading_overlay.unwrap_or_else(|| div()));
+            }
         }
 
         let state = RenderState::from_view(self);
