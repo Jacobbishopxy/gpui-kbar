@@ -16,7 +16,7 @@ use super::sections::layout::{
 use super::state::QUICK_RANGE_WINDOWS;
 use super::widgets::{header_chip, header_icon};
 use super::{ChartView, INTERVAL_TRIGGER_WIDTH, padded_bounds};
-use crate::components::loading_sand::loading_sand;
+use crate::chart::view::overlays::settings::settings_overlay;
 use core::{Candle, Interval};
 use gpui::{
     Context, Div, MouseButton, MouseDownEvent, Render, SharedString, Window, div, prelude::*, px,
@@ -65,7 +65,6 @@ pub(crate) struct RenderState {
     pub(crate) change_color: u32,
     pub(crate) symbol_label: String,
     pub(crate) price_display: String,
-    pub(crate) debug_loading: bool,
     pub(crate) tooltip: Option<Div>,
 }
 
@@ -166,16 +165,29 @@ impl RenderState {
             }
             _ => ("--".to_string(), 0x9ca3af),
         };
-        let symbol_label = Path::new(&view.source)
-            .file_name()
-            .and_then(|s| s.to_str())
-            .filter(|s| !s.is_empty())
-            .unwrap_or(view.source.as_str())
-            .to_string();
+        let symbol_label = if view.is_perf_mode() {
+            fn format_perf_n(n: usize) -> String {
+                if n >= 1_000_000 && n % 1_000_000 == 0 {
+                    format!("{}M", n / 1_000_000)
+                } else if n >= 1_000 && n % 1_000 == 0 {
+                    format!("{}k", n / 1_000)
+                } else {
+                    n.to_string()
+                }
+            }
+
+            format!("Perf {}", format_perf_n(view.perf_n.max(1)))
+        } else {
+            Path::new(&view.source)
+                .file_name()
+                .and_then(|s| s.to_str())
+                .filter(|s| !s.is_empty())
+                .unwrap_or(view.source.as_str())
+                .to_string()
+        };
         let price_display = last_close
             .map(|v| format!("{v:.2}"))
             .unwrap_or_else(|| "--".to_string());
-        let debug_loading = view.debug_loading_active();
 
         Self {
             interval_label,
@@ -201,7 +213,6 @@ impl RenderState {
             change_color,
             symbol_label,
             price_display,
-            debug_loading,
             tooltip,
         }
     }
@@ -232,6 +243,7 @@ impl Render for ChartView {
         let sidebar = build_sidebar_panels(self, _cx, &state);
         let body = build_body_layout(chart_area, sidebar);
         let interval_menu = build_interval_menu(self, _cx, INTERVAL_OPTIONS);
+        let settings_overlay = settings_overlay(self, _cx);
         let loading_overlay = build_loading_overlay(self, _cx);
         let tooltip = state.tooltip;
         build_layered_view(
@@ -242,6 +254,7 @@ impl Render for ChartView {
             footer,
             search_overlay,
             interval_menu,
+            settings_overlay,
             tooltip,
             loading_overlay,
         )
@@ -342,54 +355,32 @@ fn build_header_bar(
             .child("Replay")
     };
 
-    let trigger_debug_loader =
-        cx.listener(|this: &mut ChartView, _: &MouseDownEvent, window, _| {
-            this.start_debug_loading();
-            window.refresh();
-        });
-    let mut debug_loader_button = div()
-        .flex()
-        .items_center()
-        .gap_2()
-        .px_3()
-        .py_2()
+    let toggle_settings = cx.listener(|this: &mut ChartView, _: &MouseDownEvent, window, _| {
+        this.toggle_settings_open();
+        window.refresh();
+    });
+    let settings_button = div()
+        .w(px(36.))
+        .h(px(36.))
         .rounded_md()
+        .bg(rgb(0x111827))
         .border_1()
-        .border_color(if state.debug_loading {
-            rgb(0xf59e0b)
+        .border_color(if view.settings_open {
+            rgb(0x2563eb)
         } else {
             rgb(0x1f2937)
         })
-        .bg(rgb(0x111827))
-        .text_sm()
-        .text_color(gpui::white())
-        .on_mouse_down(MouseButton::Left, trigger_debug_loader)
-        .child("Debug load");
-    if state.debug_loading {
-        debug_loader_button = debug_loader_button.child(loading_sand(16.0, rgb(0xf59e0b)));
-    }
-
-    let perf_presets = view.is_perf_mode().then(|| {
-        let active_n = view.perf_current_n();
-        let preset = |label: &'static str, n: usize, cx: &mut Context<ChartView>| {
-            let active = active_n == Some(n);
-            let handle = cx.listener(move |this: &mut ChartView, _: &MouseDownEvent, window, cx| {
-                this.start_perf_preset_load(n, window, cx);
-            });
-            header_chip(label)
-                .border_color(if active { rgb(0x2563eb) } else { rgb(0x1f2937) })
-                .text_color(if active { rgb(0xffffff) } else { rgb(0xe5e7eb) })
-                .on_mouse_down(MouseButton::Left, handle)
-        };
-
-        div()
-            .flex()
-            .items_center()
-            .gap_1()
-            .child(preset("50k", 50_000, cx))
-            .child(preset("200k", 200_000, cx))
-            .child(preset("1M", 1_000_000, cx))
-    });
+        .flex()
+        .items_center()
+        .justify_center()
+        .on_mouse_down(MouseButton::Left, toggle_settings)
+        .child(
+            gpui::svg()
+                .path("more-horizontal.svg")
+                .w(px(18.))
+                .h(px(18.))
+                .text_color(rgb(0xe5e7eb)),
+        );
 
     let header_left = div()
         .flex()
@@ -407,11 +398,8 @@ fn build_header_bar(
         .gap_2()
         .child(header_chip("Log"))
         .child(header_chip("Auto"));
-    if let Some(perf_presets) = perf_presets {
-        header_right = header_right.child(perf_presets);
-    }
     header_right = header_right
-        .child(debug_loader_button)
+        .child(settings_button)
         .child(
             div()
                 .px_3()

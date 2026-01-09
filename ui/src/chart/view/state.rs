@@ -2,7 +2,6 @@ use std::{
     collections::{HashMap, HashSet},
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
-    time::{Duration as StdDuration, Instant},
 };
 
 use core::{Candle, Interval, LoadOptions, bounds, load_csv, resample};
@@ -28,7 +27,6 @@ pub const QUICK_RANGE_WINDOWS: [(&str, Option<Duration>); 8] = [
     ("5Y", Some(Duration::days(365 * 5))),
     ("ALL", None),
 ];
-const DEBUG_LOADING_DURATION: StdDuration = StdDuration::from_secs(3);
 
 #[derive(Clone)]
 struct LoadResult {
@@ -128,16 +126,6 @@ fn normalize_resamples(
     cache
 }
 
-fn parse_perf_field_usize(source: &str, key: &str) -> Option<usize> {
-    let idx = source.find(key)?;
-    let rest = &source[idx + key.len()..];
-    let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
-    if digits.is_empty() {
-        return None;
-    }
-    digits.parse().ok()
-}
-
 fn parse_perf_field_i64(source: &str, key: &str) -> Option<i64> {
     let idx = source.find(key)?;
     let rest = &source[idx + key.len()..];
@@ -196,6 +184,10 @@ pub struct ChartView {
     pub(super) price_max: f64,
     interval: Option<Interval>,
     pub(super) source: String,
+    pub(super) settings_open: bool,
+    pub(super) perf_mode: bool,
+    pub(super) perf_n: usize,
+    pub(super) perf_step_secs: i64,
     pub(super) view_offset: f32,
     pub(super) zoom: f32,
     pub(super) root_origin: (f32, f32),
@@ -209,7 +201,6 @@ pub struct ChartView {
     pub(super) interval_select_open: bool,
     pub(super) symbol_search_open: bool,
     pub(super) symbol_search_add_to_watchlist: bool,
-    pub(super) debug_loading_until: Option<Instant>,
     active_range_index: usize,
     replay_mode: bool,
     pub loading_symbol: Option<String>,
@@ -267,6 +258,10 @@ impl ChartView {
             price_max,
             interval,
             source: meta.source,
+            settings_open: false,
+            perf_mode: false,
+            perf_n: 200_000,
+            perf_step_secs: 60,
             view_offset: 0.0,
             zoom: 1.0,
             root_origin: (0.0, 0.0),
@@ -280,7 +275,6 @@ impl ChartView {
             interval_select_open: false,
             symbol_search_open: false,
             symbol_search_add_to_watchlist: false,
-            debug_loading_until: None,
             active_range_index: QUICK_RANGE_WINDOWS.len().saturating_sub(1),
             replay_mode: false,
             loading_symbol: None,
@@ -324,24 +318,32 @@ impl ChartView {
     }
 
     pub(super) fn is_perf_mode(&self) -> bool {
-        self.source.starts_with("__PERF__")
-    }
-
-    pub(super) fn perf_current_n(&self) -> Option<usize> {
-        parse_perf_field_usize(&self.source, "n=")
+        self.perf_mode || self.source.starts_with("__PERF__")
     }
 
     fn perf_step_secs(&self) -> i64 {
-        parse_perf_field_i64(&self.source, "step=").unwrap_or(60)
+        if self.is_perf_mode() {
+            self.perf_step_secs.max(1)
+        } else {
+            parse_perf_field_i64(&self.source, "step=")
+                .unwrap_or(60)
+                .max(1)
+        }
     }
 
-    pub(super) fn start_perf_preset_load(
+    pub(crate) fn start_perf_preset_load(
         &mut self,
         n: usize,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let step_secs = self.perf_step_secs();
+        self.perf_mode = true;
+        self.perf_n = n.max(1);
+        self.perf_step_secs = step_secs.max(1);
+        let _ = self.persist_session("perf_mode", "true");
+        let _ = self.persist_session("perf_n", &self.perf_n.to_string());
+        let _ = self.persist_session("perf_step_secs", &self.perf_step_secs.to_string());
         let load_id = self.active_load_seq.wrapping_add(1);
         self.active_load_seq = load_id;
         self.loading_symbol = Some(format!("Perf {n}"));
@@ -371,19 +373,87 @@ impl ChartView {
             .detach();
     }
 
-    pub(super) fn start_debug_loading(&mut self) {
-        self.debug_loading_until = Some(Instant::now() + DEBUG_LOADING_DURATION);
+    pub(super) fn toggle_settings_open(&mut self) {
+        self.settings_open = !self.settings_open;
+        if self.settings_open {
+            self.interval_select_open = false;
+            self.symbol_search_open = false;
+        }
     }
 
-    pub(super) fn debug_loading_active(&mut self) -> bool {
-        if let Some(until) = self.debug_loading_until {
-            if Instant::now() >= until {
-                self.debug_loading_until = None;
-                return false;
-            }
-            return true;
+    pub(super) fn close_settings(&mut self) {
+        self.settings_open = false;
+    }
+
+    pub(crate) fn set_perf_step_secs(&mut self, step_secs: i64) {
+        self.perf_step_secs = step_secs.max(1);
+        let _ = self.persist_session("perf_step_secs", &self.perf_step_secs.to_string());
+    }
+
+    pub(crate) fn set_perf_n(&mut self, n: usize) {
+        self.perf_n = n.max(1);
+        let _ = self.persist_session("perf_n", &self.perf_n.to_string());
+    }
+
+    pub(crate) fn set_perf_mode_enabled(
+        &mut self,
+        enabled: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.perf_mode = enabled;
+        let _ = self.persist_session("perf_mode", if enabled { "true" } else { "false" });
+
+        if enabled {
+            let _ = self.persist_session("perf_n", &self.perf_n.to_string());
+            let _ = self.persist_session("perf_step_secs", &self.perf_step_secs.to_string());
+            self.start_perf_preset_load(self.perf_n, window, cx);
+            return;
         }
-        false
+
+        let active_source = self
+            .store
+            .as_ref()
+            .and_then(|store| store.lock().ok())
+            .and_then(|guard| guard.get_session_value("active_source").ok().flatten());
+        if let Some(symbol) = active_source {
+            self.start_symbol_load(symbol, false, window, cx);
+        } else {
+            self.source = "Search".to_string();
+            self.candles = Arc::from([]);
+            self.base_candles = Arc::from([]);
+            self.resample_cache = vec![(None, Arc::from([]))];
+            self.invalidate_render_cache();
+            window.refresh();
+        }
+    }
+
+    pub(crate) fn set_perf_mode_flag_only(&mut self, enabled: bool) {
+        self.perf_mode = enabled;
+        let _ = self.persist_session("perf_mode", if enabled { "true" } else { "false" });
+    }
+
+    pub(crate) fn begin_external_loading(&mut self, label: String) -> u64 {
+        let load_id = self.active_load_seq.wrapping_add(1);
+        self.active_load_seq = load_id;
+        self.loading_symbol = Some(label);
+        self.load_error = None;
+        load_id
+    }
+
+    pub(crate) fn apply_external_loaded(
+        &mut self,
+        load_id: u64,
+        candles: Vec<Candle>,
+        source: String,
+    ) {
+        if self.active_load_seq != load_id {
+            return;
+        }
+        self.loading_symbol = None;
+        self.load_error = None;
+        self.perf_mode = source.starts_with("__PERF__");
+        self.replace_data(candles, source, false, false);
     }
 
     pub fn watchlist_symbols(&self) -> Vec<String> {
@@ -427,6 +497,10 @@ impl ChartView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.perf_mode {
+            self.perf_mode = false;
+            let _ = self.persist_session("perf_mode", "false");
+        }
         self.ensure_load_subscription(window, cx);
         cx.emit(LoadMsg::Start {
             symbol,
@@ -662,6 +736,15 @@ impl ChartView {
                 .unwrap_or_default();
 
             self.watchlist = session.watchlist;
+            if let Some(perf_mode) = session.perf_mode {
+                self.perf_mode = perf_mode;
+            }
+            if let Some(perf_n) = session.perf_n {
+                self.perf_n = perf_n.max(1);
+            }
+            if let Some(step) = session.perf_step_secs {
+                self.perf_step_secs = step.max(1);
+            }
 
             if let Some(interval) = session
                 .interval

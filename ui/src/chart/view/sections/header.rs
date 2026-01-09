@@ -22,6 +22,18 @@ pub fn header_controls(
 
     let search_label = if view.candles.is_empty() {
         "Search".to_string()
+    } else if view.is_perf_mode() {
+        fn format_perf_n(n: usize) -> String {
+            if n >= 1_000_000 && n % 1_000_000 == 0 {
+                format!("{}M", n / 1_000_000)
+            } else if n >= 1_000 && n % 1_000 == 0 {
+                format!("{}k", n / 1_000)
+            } else {
+                n.to_string()
+            }
+        }
+
+        format!("Perf {}", format_perf_n(view.perf_n.max(1)))
     } else {
         Path::new(&view.source)
             .file_name()

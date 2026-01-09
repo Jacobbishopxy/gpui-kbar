@@ -33,7 +33,7 @@ Validation
 
 Status
 
-- [ ] Settings model + persistence.
-- [ ] Settings drawer overlay UI.
-- [ ] Perf presets integrated into app runtime.
-- [ ] App CLI presets.
+- [x] Settings model + persistence (`perf_mode`, `perf_n`, `perf_step_secs`).
+- [x] Settings drawer overlay UI (header → “…” → Settings).
+- [x] Perf presets integrated into app runtime (restore perf mode + generate on background).
+- [x] App CLI presets (`--preset`, `--n`, `--step-secs`, `--symbol`).

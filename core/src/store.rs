@@ -38,6 +38,9 @@ pub struct UserSession {
     pub watchlist: Vec<String>,
     pub view_offset: Option<f32>,
     pub zoom: Option<f32>,
+    pub perf_mode: Option<bool>,
+    pub perf_n: Option<usize>,
+    pub perf_step_secs: Option<i64>,
 }
 
 #[derive(Debug, Error)]
@@ -402,6 +405,13 @@ impl DuckDbStore {
         let zoom = self
             .get_session_value("zoom")?
             .and_then(|v| v.parse::<f32>().ok());
+        let perf_mode = self.get_session_value("perf_mode")?.map(|v| v == "true");
+        let perf_n = self
+            .get_session_value("perf_n")?
+            .and_then(|v| v.parse::<usize>().ok());
+        let perf_step_secs = self
+            .get_session_value("perf_step_secs")?
+            .and_then(|v| v.parse::<i64>().ok());
 
         Ok(UserSession {
             active_source,
@@ -411,6 +421,9 @@ impl DuckDbStore {
             watchlist,
             view_offset,
             zoom,
+            perf_mode,
+            perf_n,
+            perf_step_secs,
         })
     }
 }
@@ -629,6 +642,13 @@ mod tests {
             .expect("view_offset");
         store.set_session_value("zoom", "2.5").expect("zoom");
         store
+            .set_session_value("perf_mode", "true")
+            .expect("perf_mode");
+        store.set_session_value("perf_n", "200000").expect("perf_n");
+        store
+            .set_session_value("perf_step_secs", "60")
+            .expect("perf_step_secs");
+        store
             .set_watchlist(&["TSLA".to_string(), "AAPL".to_string()])
             .expect("watchlist");
 
@@ -653,5 +673,8 @@ mod tests {
                 .map(|v| (v - 2.5).abs() < f32::EPSILON)
                 .unwrap_or(false)
         );
+        assert_eq!(session.perf_mode, Some(true));
+        assert_eq!(session.perf_n, Some(200000));
+        assert_eq!(session.perf_step_secs, Some(60));
     }
 }

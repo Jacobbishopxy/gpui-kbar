@@ -4,22 +4,43 @@ use gpui::{
     size,
 };
 use std::sync::{Arc, Mutex};
+use time::{Duration, OffsetDateTime};
 
 use crate::store::default_store;
 use crate::{ChartMeta, ChartView, application_with_assets};
 
+#[derive(Clone, Default)]
+pub struct RuntimeOptions {
+    pub initial_symbol: Option<String>,
+    pub perf: Option<PerfOptions>,
+}
+
+#[derive(Clone)]
+pub struct PerfOptions {
+    pub n: usize,
+    pub step_secs: i64,
+}
+
 pub fn launch_runtime() {
-    application_with_assets().run(|cx: &mut App| {
+    launch_runtime_with_options(RuntimeOptions::default());
+}
+
+pub fn launch_runtime_with_options(options: RuntimeOptions) {
+    application_with_assets().run(move |cx: &mut App| {
         gpui_component::init(cx);
 
         let bounds = Bounds::centered(None, size(px(1400.), px(900.)), cx);
+        let options = options.clone();
         cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 focus: true,
                 ..Default::default()
             },
-            |_, cx| cx.new(RuntimeView::new),
+            move |_, cx| {
+                let options = options.clone();
+                cx.new(|cx| RuntimeView::new_with_options(options, cx))
+            },
         )
         .expect("failed to open runtime window");
         cx.activate(true);
@@ -30,14 +51,18 @@ struct RuntimeView {
     chart: gpui::Entity<ChartView>,
     store: Option<Arc<Mutex<core::DuckDbStore>>>,
     restored: bool,
+    options: RuntimeOptions,
 }
 
 impl RuntimeView {
-    fn new(cx: &mut Context<Self>) -> Self {
+    fn new_with_options(options: RuntimeOptions, cx: &mut Context<Self>) -> Self {
         let store = default_store();
         let store_arc = store;
 
-        let default_source = "AAPL".to_string();
+        let default_source = options
+            .initial_symbol
+            .clone()
+            .unwrap_or_else(|| "AAPL".to_string());
         let chart = cx.new(|_| {
             ChartView::new(
                 Vec::<Candle>::new(),
@@ -52,6 +77,7 @@ impl RuntimeView {
             chart,
             store: store_arc,
             restored: false,
+            options,
         }
     }
 
@@ -87,6 +113,46 @@ impl RuntimeView {
         window.refresh();
     }
 
+    fn perf_source(n: usize, step_secs: i64) -> String {
+        format!("__PERF__ n={n} step={step_secs}s")
+    }
+
+    fn generate_perf_candles(n: usize, step_secs: i64) -> Vec<Candle> {
+        let mut state = 0x1234_5678_9abc_def0u64;
+        let mut next_f64 = || {
+            state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+            let bits = (state >> 12) | 0x3ff0_0000_0000_0000;
+            let f = f64::from_bits(bits) - 1.0;
+            f.clamp(0.0, 1.0)
+        };
+
+        let step_secs = step_secs.max(1);
+        let start_ts =
+            OffsetDateTime::now_utc() - Duration::seconds(step_secs.saturating_mul(n as i64));
+
+        let mut price = 100.0_f64;
+        let mut candles = Vec::with_capacity(n);
+        for i in 0..n {
+            let t = start_ts + Duration::seconds(step_secs.saturating_mul(i as i64));
+            let delta = (next_f64() - 0.5) * 0.8;
+            let open = price;
+            let close = price + delta;
+            let high = open.max(close) + next_f64() * 0.4;
+            let low = open.min(close) - next_f64() * 0.4;
+            let volume = (next_f64() * 1500.0).max(1.0);
+            candles.push(Candle {
+                timestamp: t,
+                open,
+                high,
+                low,
+                close,
+                volume,
+            });
+            price = close.max(1.0);
+        }
+        candles
+    }
+
     fn restore_session(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.restored {
             return;
@@ -97,6 +163,51 @@ impl RuntimeView {
         };
 
         let session = store.lock().ok().and_then(|s| s.load_user_session().ok());
+        let perf_override = self.options.perf.clone();
+        let perf_from_session = session.as_ref().and_then(|s| {
+            if s.perf_mode.unwrap_or(false) {
+                Some(PerfOptions {
+                    n: s.perf_n.unwrap_or(200_000),
+                    step_secs: s.perf_step_secs.unwrap_or(60),
+                })
+            } else {
+                None
+            }
+        });
+        let perf = perf_override.or(perf_from_session);
+
+        if let Some(perf) = perf {
+            let n = perf.n.max(1);
+            let step_secs = perf.step_secs.max(1);
+            let load_id = self.chart.update(cx, |chart, _| {
+                chart.set_perf_n(n);
+                chart.set_perf_step_secs(step_secs);
+                chart.set_perf_mode_flag_only(true);
+                chart.begin_external_loading(format!("Perf {n}"))
+            });
+
+            let chart_entity = self.chart.clone();
+            window
+                .spawn(cx, async move |async_cx| {
+                    let task = async_cx
+                        .background_executor()
+                        .spawn(async move { Self::generate_perf_candles(n, step_secs) });
+                    let candles = task.await;
+                    let source = Self::perf_source(n, step_secs);
+                    async_cx
+                        .update(|window, app| {
+                            chart_entity.update(app, |chart, cx| {
+                                chart.apply_external_loaded(load_id, candles, source);
+                                cx.notify();
+                            });
+                            window.refresh();
+                        })
+                        .ok();
+                })
+                .detach();
+            return;
+        }
+
         let cached = session.as_ref().and_then(|session| {
             session.active_source.as_deref().and_then(|source| {
                 store.lock().ok().and_then(|s| {

@@ -68,6 +68,7 @@ pub(crate) fn build_layered_view(
     footer: Div,
     search_overlay: Option<Div>,
     interval_menu: Option<Div>,
+    settings_overlay: Option<Div>,
     tooltip: Option<Div>,
     loading_overlay: Option<Div>,
 ) -> Div {
@@ -96,6 +97,10 @@ pub(crate) fn build_layered_view(
 
     if let Some(menu) = interval_menu {
         layered = layered.child(menu);
+    }
+
+    if let Some(settings) = settings_overlay {
+        layered = layered.child(settings);
     }
 
     if let Some(tip) = tooltip {
