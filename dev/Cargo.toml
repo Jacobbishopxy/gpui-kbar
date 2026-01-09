@@ -10,3 +10,4 @@ polars = { workspace = true }
 anyhow = { workspace = true }
 time = { workspace = true }
 ui = { path = "../ui" }
+kbar_core = { package = "core", path = "../core" }

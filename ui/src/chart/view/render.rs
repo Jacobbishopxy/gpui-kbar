@@ -1,13 +1,7 @@
 use std::{path::Path, sync::Arc};
 
-use core::{Candle, Interval};
-use gpui::{
-    Context, Div, MouseButton, MouseDownEvent, Render, SharedString, Window, div, prelude::*, px,
-    rgb,
-};
-use time::macros::format_description;
-
 use super::super::{
+    aggregation::AggregatedCandle,
     canvas::{chart_canvas, volume_canvas},
     footer::{chart_footer, range_button},
     header::chart_header,
@@ -23,6 +17,11 @@ use super::state::QUICK_RANGE_WINDOWS;
 use super::widgets::{header_chip, header_icon};
 use super::{ChartView, INTERVAL_TRIGGER_WIDTH, padded_bounds};
 use crate::components::loading_sand::loading_sand;
+use core::{Candle, Interval};
+use gpui::{
+    Context, Div, MouseButton, MouseDownEvent, Render, SharedString, Window, div, prelude::*, px,
+    rgb,
+};
 
 const INTERVAL_OPTIONS: &[(Option<Interval>, &str)] = &[
     (None, "raw"),
@@ -49,6 +48,8 @@ pub(crate) struct RenderState {
     pub(crate) candles: Arc<[Candle]>,
     pub(crate) visible_start: usize,
     pub(crate) visible_end: usize,
+    pub(crate) aggregated: Option<Arc<[AggregatedCandle]>>,
+    pub(crate) volume_max: Option<f64>,
     pub(crate) candle_count: usize,
     pub(crate) price_labels: [String; 3],
     pub(crate) start_label: String,
@@ -58,6 +59,7 @@ pub(crate) struct RenderState {
     pub(crate) price_max: f64,
     pub(crate) range_text: SharedString,
     pub(crate) hover_local: Option<usize>,
+    pub(crate) hover_x: Option<f32>,
     pub(crate) hover_y: Option<f32>,
     pub(crate) change_display: String,
     pub(crate) change_color: u32,
@@ -88,15 +90,40 @@ impl RenderState {
         let (mut start, mut end) = view.visible_range();
         end = end.min(view.candles.len());
         start = start.min(end);
+        if start >= end {
+            start = 0;
+            end = view.candles.len();
+        }
+
+        let columns = view
+            .chart_bounds
+            .map(|b| f32::from(b.size.width).floor().max(1.0) as usize)
+            .unwrap_or(0);
+        let (cached_min, cached_max, aggregated, volume_max) = if columns > 0 {
+            match view.render_cache(start, end, columns) {
+                Some(cache) => (
+                    Some(cache.padded_min),
+                    Some(cache.padded_max),
+                    Some(cache.aggregated.clone()),
+                    Some(cache.max_volume),
+                ),
+                None => (None, None, None, None),
+            }
+        } else {
+            (None, None, None, None)
+        };
+
         let visible = if start < end {
             &view.candles[start..end]
         } else {
-            start = 0;
-            end = view.candles.len();
             &view.candles[..]
         };
         let candle_count = visible.len();
-        let (price_min, price_max) = padded_bounds(visible);
+
+        let (price_min, price_max) = match (cached_min, cached_max) {
+            (Some(min), Some(max)) => (min, max),
+            _ => padded_bounds(visible),
+        };
         view.price_min = price_min;
         view.price_max = price_max;
         let range_text = SharedString::from(format_price_range(price_min, price_max));
@@ -107,31 +134,7 @@ impl RenderState {
             format!("{price_min:.4}"),
         ];
 
-        let time_fmt = format_description!("[year]-[month]-[day] [hour]:[minute]");
-        let start_label = visible
-            .first()
-            .map(|c| {
-                c.timestamp
-                    .format(&time_fmt)
-                    .unwrap_or_else(|_| c.timestamp.to_string())
-            })
-            .unwrap_or_else(|| "---".into());
-        let mid_label = visible
-            .get(candle_count.saturating_sub(1) / 2)
-            .map(|c| {
-                c.timestamp
-                    .format(&time_fmt)
-                    .unwrap_or_else(|_| c.timestamp.to_string())
-            })
-            .unwrap_or_else(|| "---".into());
-        let end_label = visible
-            .last()
-            .map(|c| {
-                c.timestamp
-                    .format(&time_fmt)
-                    .unwrap_or_else(|_| c.timestamp.to_string())
-            })
-            .unwrap_or_else(|| "---".into());
+        let (start_label, mid_label, end_label) = view.time_axis_labels(start, end);
 
         let candles = view.candles.clone();
         let hover_local = view.hover_index.and_then(|idx| {
@@ -141,10 +144,13 @@ impl RenderState {
                 None
             }
         });
-        let hover_y = if hover_local.is_some() {
-            view.hover_position.map(|(_, y)| y)
+        let (hover_x, hover_y) = if hover_local.is_some() {
+            (
+                view.hover_position.map(|(x, _)| x),
+                view.hover_position.map(|(_, y)| y),
+            )
         } else {
-            None
+            (None, None)
         };
         let last_close = view.candles.last().map(|c| c.close);
         let prev_close = view.candles.iter().rev().nth(1).map(|c| c.close);
@@ -178,6 +184,8 @@ impl RenderState {
             candles,
             visible_start: start,
             visible_end: end,
+            aggregated,
+            volume_max,
             candle_count,
             price_labels,
             start_label,
@@ -187,6 +195,7 @@ impl RenderState {
             price_max,
             range_text,
             hover_local,
+            hover_x,
             hover_y,
             change_display,
             change_color,
@@ -247,7 +256,9 @@ fn build_chart_area(view: &mut ChartView, cx: &mut Context<ChartView>, state: &R
         state.price_min,
         state.price_max,
         state.hover_local,
+        state.hover_x,
         state.hover_y,
+        state.aggregated.clone(),
     )
     .flex_1()
     .w_full()
@@ -257,6 +268,9 @@ fn build_chart_area(view: &mut ChartView, cx: &mut Context<ChartView>, state: &R
         state.visible_start,
         state.visible_end,
         state.hover_local,
+        state.hover_x,
+        state.aggregated.clone(),
+        state.volume_max,
     )
     .flex_1()
     .w_full()
@@ -355,6 +369,28 @@ fn build_header_bar(
         debug_loader_button = debug_loader_button.child(loading_sand(16.0, rgb(0xf59e0b)));
     }
 
+    let perf_presets = view.is_perf_mode().then(|| {
+        let active_n = view.perf_current_n();
+        let preset = |label: &'static str, n: usize, cx: &mut Context<ChartView>| {
+            let active = active_n == Some(n);
+            let handle = cx.listener(move |this: &mut ChartView, _: &MouseDownEvent, window, cx| {
+                this.start_perf_preset_load(n, window, cx);
+            });
+            header_chip(label)
+                .border_color(if active { rgb(0x2563eb) } else { rgb(0x1f2937) })
+                .text_color(if active { rgb(0xffffff) } else { rgb(0xe5e7eb) })
+                .on_mouse_down(MouseButton::Left, handle)
+        };
+
+        div()
+            .flex()
+            .items_center()
+            .gap_1()
+            .child(preset("50k", 50_000, cx))
+            .child(preset("200k", 200_000, cx))
+            .child(preset("1M", 1_000_000, cx))
+    });
+
     let header_left = div()
         .flex()
         .items_center()
@@ -365,12 +401,16 @@ fn build_header_bar(
         .child(header_icon("alarm-clock.svg", "Alerts"))
         .child(replay_chip);
 
-    let header_right = div()
+    let mut header_right = div()
         .flex()
         .items_center()
         .gap_2()
         .child(header_chip("Log"))
-        .child(header_chip("Auto"))
+        .child(header_chip("Auto"));
+    if let Some(perf_presets) = perf_presets {
+        header_right = header_right.child(perf_presets);
+    }
+    header_right = header_right
         .child(debug_loader_button)
         .child(
             div()

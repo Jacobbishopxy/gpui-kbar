@@ -8,6 +8,8 @@ use std::{
 use core::{Candle, Interval, LoadOptions, bounds, load_csv, resample};
 use gpui::{Bounds, Context, EventEmitter, Pixels, SharedString, Subscription, Window};
 use time::Duration;
+use time::OffsetDateTime;
+use time::macros::format_description;
 
 use super::super::ChartMeta;
 use crate::data::{
@@ -126,6 +128,67 @@ fn normalize_resamples(
     cache
 }
 
+fn parse_perf_field_usize(source: &str, key: &str) -> Option<usize> {
+    let idx = source.find(key)?;
+    let rest = &source[idx + key.len()..];
+    let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+    if digits.is_empty() {
+        return None;
+    }
+    digits.parse().ok()
+}
+
+fn parse_perf_field_i64(source: &str, key: &str) -> Option<i64> {
+    let idx = source.find(key)?;
+    let rest = &source[idx + key.len()..];
+    let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+    if digits.is_empty() {
+        return None;
+    }
+    digits.parse().ok()
+}
+
+fn perf_source(n: usize, step_secs: i64) -> String {
+    format!("__PERF__ n={n} step={step_secs}s")
+}
+
+fn generate_perf_candles(n: usize, step_secs: i64) -> Vec<Candle> {
+    let mut state = 0x1234_5678_9abc_def0u64;
+    let mut next_f64 = || {
+        state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+        let bits = (state >> 12) | 0x3ff0_0000_0000_0000;
+        let f = f64::from_bits(bits) - 1.0;
+        f.clamp(0.0, 1.0)
+    };
+
+    let step_secs = step_secs.max(1);
+    let start_ts =
+        OffsetDateTime::now_utc() - Duration::seconds(step_secs.saturating_mul(n as i64));
+
+    let mut price = 100.0_f64;
+    let mut candles = Vec::with_capacity(n);
+    for i in 0..n {
+        let t = start_ts + Duration::seconds(step_secs.saturating_mul(i as i64));
+        let delta = (next_f64() - 0.5) * 0.8;
+        let open = price;
+        let close = price + delta;
+        let high = open.max(close) + next_f64() * 0.4;
+        let low = open.min(close) - next_f64() * 0.4;
+        let volume = (next_f64() * 1500.0).max(1.0);
+        candles.push(Candle {
+            timestamp: t,
+            open,
+            high,
+            low,
+            close,
+            volume,
+        });
+        price = close.max(1.0);
+    }
+
+    candles
+}
+
 pub struct ChartView {
     pub(super) base_candles: Arc<[Candle]>,
     pub(super) candles: Arc<[Candle]>,
@@ -160,6 +223,29 @@ pub struct ChartView {
     symbol_search_filter: String,
     universe: Vec<SymbolSearchEntry>,
     resample_cache: Vec<(Option<Interval>, Arc<[Candle]>)>,
+    render_cache_revision: u64,
+    render_cache: Option<RenderCache>,
+    time_axis_cache: Option<TimeAxisCache>,
+}
+
+pub(super) struct RenderCache {
+    pub(super) revision: u64,
+    pub(super) start: usize,
+    pub(super) end: usize,
+    pub(super) columns: usize,
+    pub(super) aggregated: Arc<[crate::chart::aggregation::AggregatedCandle]>,
+    pub(super) padded_min: f64,
+    pub(super) padded_max: f64,
+    pub(super) max_volume: f64,
+}
+
+struct TimeAxisCache {
+    revision: u64,
+    start: usize,
+    end: usize,
+    start_label: String,
+    mid_label: String,
+    end_label: String,
 }
 
 impl ChartView {
@@ -208,6 +294,9 @@ impl ChartView {
             symbol_search_filter: "All".to_string(),
             universe: Vec::new(),
             resample_cache: vec![(None, base_arc)],
+            render_cache_revision: 0,
+            render_cache: None,
+            time_axis_cache: None,
         }
     }
 
@@ -232,6 +321,54 @@ impl ChartView {
 
     pub fn replay_enabled(&self) -> bool {
         self.replay_mode
+    }
+
+    pub(super) fn is_perf_mode(&self) -> bool {
+        self.source.starts_with("__PERF__")
+    }
+
+    pub(super) fn perf_current_n(&self) -> Option<usize> {
+        parse_perf_field_usize(&self.source, "n=")
+    }
+
+    fn perf_step_secs(&self) -> i64 {
+        parse_perf_field_i64(&self.source, "step=").unwrap_or(60)
+    }
+
+    pub(super) fn start_perf_preset_load(
+        &mut self,
+        n: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let step_secs = self.perf_step_secs();
+        let load_id = self.active_load_seq.wrapping_add(1);
+        self.active_load_seq = load_id;
+        self.loading_symbol = Some(format!("Perf {n}"));
+        self.load_error = None;
+        window.refresh();
+
+        let entity = cx.entity();
+        window
+            .spawn(cx, async move |async_cx| {
+                let task = async_cx
+                    .background_executor()
+                    .spawn(async move { generate_perf_candles(n, step_secs) });
+                let candles = task.await;
+                async_cx
+                    .update(|window, app| {
+                        entity.update(app, |this, cx| {
+                            if this.active_load_seq != load_id {
+                                return;
+                            }
+                            this.replace_data(candles, perf_source(n, step_secs), false, false);
+                            cx.notify();
+                        });
+                        window.refresh();
+                    })
+                    .ok();
+            })
+            .detach();
     }
 
     pub(super) fn start_debug_loading(&mut self) {
@@ -625,9 +762,159 @@ impl ChartView {
         (start, end)
     }
 
+    fn invalidate_render_cache(&mut self) {
+        self.render_cache_revision = self.render_cache_revision.wrapping_add(1);
+        self.render_cache = None;
+        self.time_axis_cache = None;
+    }
+
+    pub(super) fn time_axis_labels(
+        &mut self,
+        start: usize,
+        end: usize,
+    ) -> (String, String, String) {
+        if self.candles.is_empty() {
+            self.time_axis_cache = None;
+            return ("---".into(), "---".into(), "---".into());
+        }
+
+        let end = end.min(self.candles.len());
+        let start = start.min(end);
+
+        let needs_rebuild = match self.time_axis_cache.as_ref() {
+            Some(cache) => {
+                cache.revision != self.render_cache_revision
+                    || cache.start != start
+                    || cache.end != end
+            }
+            None => true,
+        };
+        if needs_rebuild {
+            let visible = if start < end {
+                &self.candles[start..end]
+            } else {
+                &self.candles[..]
+            };
+
+            let time_fmt = format_description!("[year]-[month]-[day] [hour]:[minute]");
+            let start_label = visible
+                .first()
+                .map(|c| {
+                    c.timestamp
+                        .format(&time_fmt)
+                        .unwrap_or_else(|_| c.timestamp.to_string())
+                })
+                .unwrap_or_else(|| "---".into());
+            let mid_label = visible
+                .get(visible.len().saturating_sub(1) / 2)
+                .map(|c| {
+                    c.timestamp
+                        .format(&time_fmt)
+                        .unwrap_or_else(|_| c.timestamp.to_string())
+                })
+                .unwrap_or_else(|| "---".into());
+            let end_label = visible
+                .last()
+                .map(|c| {
+                    c.timestamp
+                        .format(&time_fmt)
+                        .unwrap_or_else(|_| c.timestamp.to_string())
+                })
+                .unwrap_or_else(|| "---".into());
+
+            self.time_axis_cache = Some(TimeAxisCache {
+                revision: self.render_cache_revision,
+                start,
+                end,
+                start_label,
+                mid_label,
+                end_label,
+            });
+        }
+
+        let cache = self.time_axis_cache.as_ref();
+        match cache {
+            Some(cache) => (
+                cache.start_label.clone(),
+                cache.mid_label.clone(),
+                cache.end_label.clone(),
+            ),
+            None => ("---".into(), "---".into(), "---".into()),
+        }
+    }
+
+    pub(super) fn render_cache(
+        &mut self,
+        start: usize,
+        end: usize,
+        columns: usize,
+    ) -> Option<&RenderCache> {
+        if columns == 0 || start >= end || self.candles.is_empty() {
+            self.render_cache = None;
+            return None;
+        }
+
+        let end = end.min(self.candles.len());
+        let start = start.min(end);
+        let candle_count = end.saturating_sub(start);
+        if candle_count == 0 || candle_count <= columns {
+            self.render_cache = None;
+            return None;
+        }
+
+        let needs_rebuild = match self.render_cache.as_ref() {
+            Some(cache) => {
+                cache.revision != self.render_cache_revision
+                    || cache.start != start
+                    || cache.end != end
+                    || cache.columns != columns
+            }
+            None => true,
+        };
+        if needs_rebuild {
+            let visible = &self.candles[start..end];
+            let mut aggregated = Vec::with_capacity(columns);
+            let mut min_low = f64::INFINITY;
+            let mut max_high = f64::NEG_INFINITY;
+            let mut max_volume = 0.0_f64;
+
+            for col in 0..columns {
+                let g_start = col * candle_count / columns;
+                let g_end = ((col + 1) * candle_count / columns).max(g_start + 1);
+                let group = &visible[g_start..g_end];
+                if let Some(agg) = crate::chart::aggregation::AggregatedCandle::from_slice(group) {
+                    min_low = min_low.min(agg.low);
+                    max_high = max_high.max(agg.high);
+                    max_volume = max_volume.max(agg.volume);
+                    aggregated.push(agg);
+                }
+            }
+
+            if aggregated.is_empty() {
+                self.render_cache = None;
+                return None;
+            }
+
+            let (padded_min, padded_max) = padded_bounds_from_min_max(min_low, max_high);
+            self.render_cache = Some(RenderCache {
+                revision: self.render_cache_revision,
+                start,
+                end,
+                columns,
+                aggregated: Arc::from(aggregated),
+                padded_min,
+                padded_max,
+                max_volume,
+            });
+        }
+
+        self.render_cache.as_ref()
+    }
+
     pub(super) fn apply_interval(&mut self, interval: Option<Interval>, persist: bool) {
         self.interval = interval;
         self.candles = self.resampled_for(interval);
+        self.invalidate_render_cache();
         self.view_offset = 0.0;
         self.zoom = 1.0;
         self.hover_index = None;
@@ -688,6 +975,7 @@ impl ChartView {
 
         self.candles = next_candles;
         self.interval = interval;
+        self.invalidate_render_cache();
         self.apply_range_index(self.active_range_index, persist_session);
 
         self.source = source;
@@ -834,6 +1122,19 @@ impl EventEmitter<LoadMsg> for ChartView {}
 
 pub fn padded_bounds(candles: &[Candle]) -> (f64, f64) {
     let (min, mut max) = bounds(candles).unwrap_or((0.0, 1.0));
+    if min == max {
+        max = min + 1.0;
+    }
+    let pad = ((max - min) * 0.01).max(0.0);
+    (min - pad, max + pad)
+}
+
+fn padded_bounds_from_min_max(min: f64, max: f64) -> (f64, f64) {
+    let mut min = if min.is_finite() { min } else { 0.0 };
+    let mut max = if max.is_finite() { max } else { 1.0 };
+    if min > max {
+        std::mem::swap(&mut min, &mut max);
+    }
     if min == max {
         max = min + 1.0;
     }
