@@ -7,8 +7,25 @@ use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 pub fn load_csv(path: impl AsRef<Path>, options: LoadOptions) -> Result<Vec<Candle>, LoadError> {
     let pl_path = PlPathRef::from_local_path(path.as_ref()).into_owned();
-    let lf = LazyCsvReader::new(pl_path).with_has_header(true);
-    let df = lf.finish()?.collect()?;
+    let columns = &options.columns;
+    let lf = LazyCsvReader::new(pl_path)
+        .with_has_header(true)
+        // Avoid scanning the entire file to infer types.
+        .with_infer_schema_length(Some(1_024))
+        // Try to parse ISO-ish timestamps eagerly (e.g. RFC3339).
+        .with_try_parse_dates(true);
+    let mut lf = lf.finish()?;
+    ensure_columns(&mut lf, columns)?;
+    let df = lf
+        .select([
+            col(&columns.timestamp),
+            col(&columns.open),
+            col(&columns.high),
+            col(&columns.low),
+            col(&columns.close),
+            col(&columns.volume),
+        ])
+        .collect()?;
     parse_frame(df, &options.columns)
 }
 
@@ -17,30 +34,57 @@ pub fn load_parquet(
     options: LoadOptions,
 ) -> Result<Vec<Candle>, LoadError> {
     let pl_path = PlPathRef::from_local_path(path.as_ref()).into_owned();
-    let lf = LazyFrame::scan_parquet(pl_path, ScanArgsParquet::default())?;
-    let df = lf.collect()?;
+    let columns = &options.columns;
+    let mut lf = LazyFrame::scan_parquet(pl_path, ScanArgsParquet::default())?;
+    ensure_columns(&mut lf, columns)?;
+    let df = lf
+        .select([
+            col(&columns.timestamp),
+            col(&columns.open),
+            col(&columns.high),
+            col(&columns.low),
+            col(&columns.close),
+            col(&columns.volume),
+        ])
+        .collect()?;
     parse_frame(df, &options.columns)
+}
+
+fn ensure_columns(lf: &mut LazyFrame, columns: &ColumnMapping) -> Result<(), LoadError> {
+    let schema = lf.collect_schema()?;
+    for required in [
+        &columns.timestamp,
+        &columns.open,
+        &columns.high,
+        &columns.low,
+        &columns.close,
+        &columns.volume,
+    ] {
+        if schema.get(required.as_str()).is_none() {
+            return Err(LoadError::MissingColumn(required.clone()));
+        }
+    }
+    Ok(())
 }
 
 fn parse_frame(df: DataFrame, columns: &ColumnMapping) -> Result<Vec<Candle>, LoadError> {
     let ts = df
         .column(&columns.timestamp)
         .map_err(|_| LoadError::MissingColumn(columns.timestamp.clone()))?;
-    let open = df
-        .column(&columns.open)
-        .map_err(|_| LoadError::MissingColumn(columns.open.clone()))?;
-    let high = df
-        .column(&columns.high)
-        .map_err(|_| LoadError::MissingColumn(columns.high.clone()))?;
-    let low = df
-        .column(&columns.low)
-        .map_err(|_| LoadError::MissingColumn(columns.low.clone()))?;
-    let close = df
-        .column(&columns.close)
-        .map_err(|_| LoadError::MissingColumn(columns.close.clone()))?;
-    let volume = df
-        .column(&columns.volume)
-        .map_err(|_| LoadError::MissingColumn(columns.volume.clone()))?;
+
+    let open = float64_col(&df, &columns.open)?;
+    let high = float64_col(&df, &columns.high)?;
+    let low = float64_col(&df, &columns.low)?;
+    let close = float64_col(&df, &columns.close)?;
+    let volume = float64_col(&df, &columns.volume)?;
+    let numeric = NumericCols {
+        columns,
+        open: &open,
+        high: &high,
+        low: &low,
+        close: &close,
+        volume: &volume,
+    };
 
     let len = ts.len();
     if open.len() != len
@@ -53,33 +97,187 @@ fn parse_frame(df: DataFrame, columns: &ColumnMapping) -> Result<Vec<Candle>, Lo
     }
 
     let mut candles = Vec::with_capacity(len);
-    for idx in 0..len {
-        let timestamp = to_datetime(ts.get(idx)?, idx)?;
-        let open = to_f64(open.get(idx)?, &columns.open, idx)?;
-        let high = to_f64(high.get(idx)?, &columns.high, idx)?;
-        let low = to_f64(low.get(idx)?, &columns.low, idx)?;
-        let close = to_f64(close.get(idx)?, &columns.close, idx)?;
-        let volume = to_f64(volume.get(idx)?, &columns.volume, idx)?;
-
-        if low > high {
-            return Err(LoadError::InvertedRange {
-                row: idx,
-                low,
-                high,
-            });
+    match ts.dtype() {
+        DataType::Datetime(unit, _) => {
+            let unit = *unit;
+            let dt = ts
+                .datetime()
+                .expect("polars datetime dtype should have datetime accessor")
+                .clone();
+            for row in 0..len {
+                let ts_raw = dt
+                    .phys
+                    .get(row)
+                    .ok_or_else(|| LoadError::UnsupportedTimestamp {
+                        row,
+                        value: "null".to_string(),
+                    })?;
+                build_row(
+                    &mut candles,
+                    row,
+                    from_timestamp(ts_raw, unit, row)?,
+                    &numeric,
+                )?;
+            }
         }
-
-        candles.push(Candle {
-            timestamp,
-            open,
-            high,
-            low,
-            close,
-            volume,
-        });
+        DataType::Date => {
+            let dates = ts
+                .date()
+                .expect("polars date dtype should have date accessor")
+                .clone();
+            for row in 0..len {
+                let days = dates
+                    .phys
+                    .get(row)
+                    .ok_or_else(|| LoadError::UnsupportedTimestamp {
+                        row,
+                        value: "null".to_string(),
+                    })?;
+                let secs = days as i64 * 86_400;
+                let timestamp = OffsetDateTime::from_unix_timestamp(secs).map_err(|_| {
+                    LoadError::UnsupportedTimestamp {
+                        row,
+                        value: format!("days since epoch: {days}"),
+                    }
+                })?;
+                build_row(&mut candles, row, timestamp, &numeric)?;
+            }
+        }
+        DataType::Int64 => {
+            let secs = ts
+                .i64()
+                .expect("polars i64 dtype should have i64 accessor")
+                .clone();
+            for row in 0..len {
+                let secs = secs
+                    .get(row)
+                    .ok_or_else(|| LoadError::UnsupportedTimestamp {
+                        row,
+                        value: "null".to_string(),
+                    })?;
+                let timestamp = OffsetDateTime::from_unix_timestamp(secs).map_err(|_| {
+                    LoadError::UnsupportedTimestamp {
+                        row,
+                        value: secs.to_string(),
+                    }
+                })?;
+                build_row(&mut candles, row, timestamp, &numeric)?;
+            }
+        }
+        DataType::String => {
+            let strings = ts
+                .str()
+                .expect("polars string dtype should have string accessor")
+                .clone();
+            for row in 0..len {
+                let s = strings
+                    .get(row)
+                    .ok_or_else(|| LoadError::UnsupportedTimestamp {
+                        row,
+                        value: "null".to_string(),
+                    })?;
+                let timestamp = OffsetDateTime::parse(s, &Rfc3339).map_err(|err| {
+                    LoadError::UnsupportedTimestamp {
+                        row,
+                        value: format!("{s} ({err})"),
+                    }
+                })?;
+                build_row(&mut candles, row, timestamp, &numeric)?;
+            }
+        }
+        _other => {
+            // Preserve legacy behavior for unexpected types.
+            for row in 0..len {
+                let timestamp = to_datetime(ts.get(row)?, row)?;
+                build_row(&mut candles, row, timestamp, &numeric)?;
+            }
+        }
     }
 
     Ok(candles)
+}
+
+struct NumericCols<'a> {
+    columns: &'a ColumnMapping,
+    open: &'a Float64Chunked,
+    high: &'a Float64Chunked,
+    low: &'a Float64Chunked,
+    close: &'a Float64Chunked,
+    volume: &'a Float64Chunked,
+}
+
+fn float64_col(df: &DataFrame, name: &str) -> Result<Float64Chunked, LoadError> {
+    let s = df
+        .column(name)
+        .map_err(|_| LoadError::MissingColumn(name.to_string()))?;
+    let cast = match s.dtype() {
+        DataType::Float64 => s.clone(),
+        _ => s.cast(&DataType::Float64)?,
+    };
+    Ok(cast.f64().expect("cast above ensures Float64").clone())
+}
+
+fn build_row(
+    out: &mut Vec<Candle>,
+    row: usize,
+    timestamp: OffsetDateTime,
+    numeric: &NumericCols<'_>,
+) -> Result<(), LoadError> {
+    let open = numeric
+        .open
+        .get(row)
+        .ok_or_else(|| LoadError::InvalidNumber {
+            column: numeric.columns.open.clone(),
+            row,
+            value: "null".to_string(),
+        })?;
+    let high = numeric
+        .high
+        .get(row)
+        .ok_or_else(|| LoadError::InvalidNumber {
+            column: numeric.columns.high.clone(),
+            row,
+            value: "null".to_string(),
+        })?;
+    let low = numeric
+        .low
+        .get(row)
+        .ok_or_else(|| LoadError::InvalidNumber {
+            column: numeric.columns.low.clone(),
+            row,
+            value: "null".to_string(),
+        })?;
+    let close = numeric
+        .close
+        .get(row)
+        .ok_or_else(|| LoadError::InvalidNumber {
+            column: numeric.columns.close.clone(),
+            row,
+            value: "null".to_string(),
+        })?;
+    let volume = numeric
+        .volume
+        .get(row)
+        .ok_or_else(|| LoadError::InvalidNumber {
+            column: numeric.columns.volume.clone(),
+            row,
+            value: "null".to_string(),
+        })?;
+
+    if low > high {
+        return Err(LoadError::InvertedRange { row, low, high });
+    }
+
+    out.push(Candle {
+        timestamp,
+        open,
+        high,
+        low,
+        close,
+        volume,
+    });
+
+    Ok(())
 }
 
 fn to_datetime(value: AnyValue, row: usize) -> Result<OffsetDateTime, LoadError> {
@@ -124,26 +322,4 @@ fn from_timestamp(value: i64, unit: TimeUnit, row: usize) -> Result<OffsetDateTi
             value: format!("{value} ({unit:?})"),
         }
     })
-}
-
-fn to_f64(value: AnyValue, column: &str, row: usize) -> Result<f64, LoadError> {
-    match value {
-        AnyValue::Float64(v) => Ok(v),
-        AnyValue::Float32(v) => Ok(v as f64),
-        AnyValue::Int64(v) => Ok(v as f64),
-        AnyValue::Int32(v) => Ok(v as f64),
-        AnyValue::UInt64(v) => Ok(v as f64),
-        AnyValue::UInt32(v) => Ok(v as f64),
-        AnyValue::String(s) => s.parse::<f64>().map_err(|_| LoadError::InvalidNumber {
-            column: column.to_string(),
-            row,
-            value: s.to_string(),
-        }),
-        AnyValue::StringOwned(s) => to_f64(AnyValue::String(&s), column, row),
-        other => Err(LoadError::InvalidNumber {
-            column: column.to_string(),
-            row,
-            value: format!("{other:?}"),
-        }),
-    }
 }

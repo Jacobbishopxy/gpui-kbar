@@ -16,3 +16,8 @@ Next steps
 - [x] Add loader unit tests with sample CSV/Parquet fixtures.
 - [x] Expose optional resampling/aggregation and bounds helpers for chart scaling.
 - [x] Wire app/ui to invoke loaders and pass data into gpui state/controls.
+
+Follow-up (2026-01-09)
+
+- [x] Speed up CSV/Parquet loads by projecting only the required 6 columns and limiting schema inference; switch parsing to typed column access to reduce per-row overhead.
+  - Files: `core/src/load.rs`

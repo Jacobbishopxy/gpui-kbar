@@ -33,6 +33,7 @@ struct LoadResult {
     symbol: String,
     base: Arc<[Candle]>,
     resamples: Vec<(Option<Interval>, Arc<[Candle]>)>,
+    needs_persist: bool,
 }
 
 #[derive(Clone)]
@@ -58,10 +59,7 @@ struct PersistSnapshot {
     watchlist: Vec<String>,
 }
 
-fn collect_resample_intervals(
-    interval_at_start: Option<Interval>,
-    cache: &[(Option<Interval>, Arc<[Candle]>)],
-) -> Vec<Option<Interval>> {
+fn collect_resample_intervals(interval_at_start: Option<Interval>) -> Vec<Option<Interval>> {
     let mut seen = HashSet::new();
     let mut intervals = Vec::new();
 
@@ -69,16 +67,10 @@ fn collect_resample_intervals(
         intervals.push(None);
     }
 
-    if let Some(interval) = interval_at_start {
-        if seen.insert(Some(interval)) {
-            intervals.push(Some(interval));
-        }
-    }
-
-    for (interval, _) in cache {
-        if seen.insert(*interval) {
-            intervals.push(*interval);
-        }
+    if let Some(interval) = interval_at_start
+        && seen.insert(Some(interval))
+    {
+        intervals.push(Some(interval));
     }
 
     intervals
@@ -497,8 +489,7 @@ impl ChartView {
                 let force_reload = self.force_symbol_reload;
                 self.force_symbol_reload = false;
                 let interval_at_start = self.current_interval();
-                let resample_intervals =
-                    collect_resample_intervals(interval_at_start, &self.resample_cache);
+                let resample_intervals = collect_resample_intervals(interval_at_start);
                 self.ensure_symbol_catalog();
                 if self.loading_symbol.as_deref() == Some(symbol) {
                     return;
@@ -528,8 +519,10 @@ impl ChartView {
 
                 window
                     .spawn(cx, async move |async_cx| {
-                        let task = async_cx.background_executor().spawn(async move {
-                            if let Some(store_arc) = store.as_ref() {
+                        let bg = async_cx.background_executor().clone();
+                        let store_for_task = store.clone();
+                        let task = bg.spawn(async move {
+                            if let Some(store_arc) = store_for_task.as_ref() {
                                 let cached = store_arc
                                     .lock()
                                     .ok()
@@ -549,6 +542,7 @@ impl ChartView {
                                         symbol: symbol_for_task.clone(),
                                         base: base_arc,
                                         resamples,
+                                        needs_persist: false,
                                     });
                                 }
                             }
@@ -566,33 +560,42 @@ impl ChartView {
                             } else {
                                 let base_arc: Arc<[Candle]> = Arc::from(candles);
                                 let resamples = build_resamples(&base_arc, &resample_intervals);
-                                if let Some(store_arc) = store.as_ref() {
-                                    if let Ok(guard) = store_arc.lock() {
-                                        guard
-                                            .write_candles(&symbol_for_task, base_arc.as_ref())
-                                            .map_err(|e| {
-                                                format!("failed to persist {symbol_for_task}: {e}")
-                                            })?;
-                                        let _ = guard
-                                            .set_session_value("active_source", &symbol_for_task);
-                                    }
-                                }
                                 Ok(LoadResult {
                                     symbol: symbol_for_task.clone(),
                                     base: base_arc,
                                     resamples,
+                                    needs_persist: store_for_task.is_some(),
                                 })
                             }
                         });
 
                         let mut result = task.await;
-                        let bg = async_cx.background_executor().clone();
                         let desired_interval = async_cx
                             .update(|_, app| entity.update(app, |view, _| view.current_interval()))
                             .ok()
                             .flatten();
 
                         if let Ok(ref mut loaded) = result {
+                            if loaded.needs_persist {
+                                if let Some(store_arc) = store.clone() {
+                                    let symbol_for_persist = loaded.symbol.clone();
+                                    let base_for_persist = loaded.base.clone();
+                                    bg.spawn(async move {
+                                        if let Ok(guard) = store_arc.lock() {
+                                            let _ = guard.write_candles(
+                                                &symbol_for_persist,
+                                                base_for_persist.as_ref(),
+                                            );
+                                            let _ = guard.set_session_value(
+                                                "active_source",
+                                                &symbol_for_persist,
+                                            );
+                                        }
+                                    })
+                                    .detach();
+                                }
+                                loaded.needs_persist = false;
+                            }
                             if let Some(interval) = desired_interval {
                                 let missing = !loaded
                                     .resamples
@@ -640,6 +643,7 @@ impl ChartView {
                         symbol,
                         base,
                         resamples,
+                        ..
                     }) => {
                         self.load_error = None;
                         self.replace_data_from_load(

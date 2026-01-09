@@ -155,26 +155,38 @@ impl DuckDbStore {
 
         for conn in self.connections() {
             // Replace any existing rows for this symbol to avoid duplicates when reloading.
-            let tx = conn.unchecked_transaction()?;
-            tx.execute("DELETE FROM candles WHERE symbol = ?", params![symbol])?;
+            //
+            // Use an appender for bulk insertion; row-by-row `execute` is noticeably slower
+            // for 100k+ candles and can hurt UI load times.
+            conn.execute_batch("BEGIN TRANSACTION")?;
+            let result: Result<(), StoreError> = (|| {
+                conn.execute("DELETE FROM candles WHERE symbol = ?", params![symbol])?;
 
-            let mut stmt = tx.prepare(
-                "INSERT INTO candles (symbol, timestamp, open, high, low, close, volume)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            )?;
-            for candle in &deduped {
-                let ts = candle.timestamp.format(&Rfc3339)?;
-                stmt.execute(params![
-                    symbol,
-                    ts,
-                    candle.open,
-                    candle.high,
-                    candle.low,
-                    candle.close,
-                    candle.volume
-                ])?;
+                let mut app = conn.appender("candles")?;
+                for candle in &deduped {
+                    let ts = candle.timestamp.format(&Rfc3339)?;
+                    app.append_row(params![
+                        symbol,
+                        ts,
+                        candle.open,
+                        candle.high,
+                        candle.low,
+                        candle.close,
+                        candle.volume
+                    ])?;
+                }
+                app.flush()?;
+
+                Ok(())
+            })();
+
+            match result {
+                Ok(()) => conn.execute_batch("COMMIT")?,
+                Err(err) => {
+                    let _ = conn.execute_batch("ROLLBACK");
+                    return Err(err);
+                }
             }
-            tx.commit()?;
         }
 
         Ok(())

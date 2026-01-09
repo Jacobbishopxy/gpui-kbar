@@ -29,6 +29,13 @@ Fix
   - Files: `ui/src/chart/view/render.rs`, `ui/src/chart/canvas.rs`
 - All temporary debug logging/instrumentation used during investigation was removed.
 
+Follow-up (2026-01-09)
+
+- Reduced “time to first render” on real symbol loads:
+  - CSV/Parquet loader now projects only the required columns and uses typed column access (`core/src/load.rs`).
+  - Avoid eager resampling of historical intervals when switching symbols; only load `None` + current interval, compute others lazily (`ui/src/chart/view/state.rs`).
+  - DuckDB cache writes no longer block symbol load completion; writes happen in the background and use DuckDB `Appender` for bulk inserts (`ui/src/chart/view/state.rs`, `core/src/store.rs`).
+
 Status
 
 - [x] Loading overlay spinner animates during real symbol loads (manual validation).
