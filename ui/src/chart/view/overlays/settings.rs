@@ -1,5 +1,6 @@
 use gpui::{
-    Context, Div, MouseButton, MouseDownEvent, Window, div, prelude::*, px, rgb, rgba, svg,
+    Context, Div, MouseButton, MouseDownEvent, MouseMoveEvent, ScrollWheelEvent, Window, div,
+    prelude::*, px, rgb, rgba, svg,
 };
 
 use crate::chart::view::ChartView;
@@ -63,6 +64,12 @@ pub fn settings_overlay(view: &mut ChartView, cx: &mut Context<ChartView>) -> Op
         window.refresh();
     });
     let block_click = cx.listener(|_: &mut ChartView, _: &MouseDownEvent, _, cx| {
+        cx.stop_propagation();
+    });
+    let block_mouse_move = cx.listener(|_: &mut ChartView, _: &MouseMoveEvent, _, cx| {
+        cx.stop_propagation();
+    });
+    let block_scroll = cx.listener(|_: &mut ChartView, _: &ScrollWheelEvent, _, cx| {
         cx.stop_propagation();
     });
 
@@ -183,6 +190,31 @@ pub fn settings_overlay(view: &mut ChartView, cx: &mut Context<ChartView>) -> Op
         )
     };
 
+    let reset_row = row(
+        "Defaults",
+        chip_button(
+            "Reset",
+            false,
+            |this, _, window, cx| {
+                this.reset_settings_to_defaults(window, cx);
+                window.refresh();
+            },
+            cx,
+        ),
+    );
+    let cleanup_row = row(
+        "Legacy",
+        chip_button(
+            "Cleanup",
+            false,
+            |this, _, window, _| {
+                this.cleanup_legacy_perf_active_source();
+                window.refresh();
+            },
+            cx,
+        ),
+    );
+
     let panel = div()
         .w(px(360.))
         .bg(rgb(0x0b1220))
@@ -234,6 +266,15 @@ pub fn settings_overlay(view: &mut ChartView, cx: &mut Context<ChartView>) -> Op
         .child(section(
             "Chart",
             div().flex().flex_col().gap_3().child(replay_row),
+        ))
+        .child(section(
+            "Actions",
+            div()
+                .flex()
+                .flex_col()
+                .gap_3()
+                .child(reset_row)
+                .child(cleanup_row),
         ));
 
     Some(
@@ -245,6 +286,8 @@ pub fn settings_overlay(view: &mut ChartView, cx: &mut Context<ChartView>) -> Op
             .h_full()
             .bg(rgba(0x00000000))
             .on_mouse_down(MouseButton::Left, close_overlay)
+            .on_mouse_move(block_mouse_move)
+            .on_scroll_wheel(block_scroll)
             .child(div().absolute().right(px(16.)).top(px(76.)).child(panel)),
     )
 }

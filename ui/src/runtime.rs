@@ -63,7 +63,7 @@ impl RuntimeView {
             .initial_symbol
             .clone()
             .unwrap_or_else(|| "AAPL".to_string());
-        let chart = cx.new(|_| {
+        let chart = cx.new(|cx| {
             ChartView::new(
                 Vec::<Candle>::new(),
                 ChartMeta {
@@ -71,6 +71,7 @@ impl RuntimeView {
                     initial_interval: None,
                 },
                 store_arc.clone(),
+                cx,
             )
         });
         Self {

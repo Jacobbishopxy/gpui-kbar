@@ -214,6 +214,10 @@ impl RenderState {
 
 impl Render for ChartView {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        if self.settings_open && !self.focus_handle.is_focused(_window) {
+            self.focus_handle.focus(_window);
+        }
+
         // Keep animation frames flowing while the blocking overlay is visible.
         if self.loading_symbol.is_some() {
             _window.request_animation_frame();
@@ -305,6 +309,9 @@ fn build_header_bar(
         cx.listener(|this: &mut ChartView, _: &MouseDownEvent, window, _| {
             this.interval_select_open = !this.interval_select_open;
             this.symbol_search_open = false;
+            if this.interval_select_open {
+                this.focus_handle.focus(window);
+            }
             window.refresh();
         });
 
@@ -351,6 +358,9 @@ fn build_header_bar(
 
     let toggle_settings = cx.listener(|this: &mut ChartView, _: &MouseDownEvent, window, _| {
         this.toggle_settings_open();
+        if this.settings_open {
+            this.focus_handle.focus(window);
+        }
         window.refresh();
     });
     let settings_button = div()
@@ -370,7 +380,7 @@ fn build_header_bar(
         .on_mouse_down(MouseButton::Left, toggle_settings)
         .child(
             gpui::svg()
-                .path("more-horizontal.svg")
+                .path("settings.svg")
                 .w(px(18.))
                 .h(px(18.))
                 .text_color(rgb(0xe5e7eb)),

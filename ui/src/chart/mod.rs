@@ -33,7 +33,9 @@ pub fn launch_chart(candles: Result<Vec<Candle>, String>, meta: ChartMeta) {
                         ..Default::default()
                     },
                     move |_, cx| {
-                        cx.new(|_| ChartView::new(initial_base.clone(), view_meta.clone(), None))
+                        cx.new(|cx| {
+                            ChartView::new(initial_base.clone(), view_meta.clone(), None, cx)
+                        })
                     },
                 )
                 .expect("failed to open window");

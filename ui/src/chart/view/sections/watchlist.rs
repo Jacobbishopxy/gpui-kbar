@@ -14,6 +14,9 @@ pub fn watchlist_panel(view: &mut ChartView, cx: &mut Context<ChartView>) -> Div
             this.symbol_search_add_to_watchlist = true;
             this.symbol_search_open = !should_close;
             this.interval_select_open = false;
+            if this.symbol_search_open {
+                this.focus_handle.focus(window);
+            }
             window.refresh();
         });
 

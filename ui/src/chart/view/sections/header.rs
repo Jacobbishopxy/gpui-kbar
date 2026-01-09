@@ -18,6 +18,9 @@ pub fn header_controls(
             this.symbol_search_add_to_watchlist = false;
             this.symbol_search_open = !was_open;
             this.interval_select_open = false;
+            if this.symbol_search_open {
+                this.focus_handle.focus(window);
+            }
             window.refresh();
         });
 

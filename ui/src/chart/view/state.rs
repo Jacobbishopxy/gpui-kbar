@@ -5,7 +5,9 @@ use std::{
 };
 
 use core::{Candle, Interval, LoadOptions, bounds, load_csv, resample};
-use gpui::{Bounds, Context, EventEmitter, Pixels, SharedString, Subscription, Window};
+use gpui::{
+    Bounds, Context, EventEmitter, FocusHandle, Pixels, SharedString, Subscription, Window,
+};
 use time::Duration;
 use time::macros::format_description;
 
@@ -119,6 +121,7 @@ fn normalize_resamples(
 }
 
 pub struct ChartView {
+    pub(super) focus_handle: FocusHandle,
     pub(super) base_candles: Arc<[Candle]>,
     pub(super) candles: Arc<[Candle]>,
     pub(super) price_min: f64,
@@ -186,6 +189,7 @@ impl ChartView {
         base_candles: Vec<Candle>,
         meta: ChartMeta,
         store: Option<Arc<Mutex<DuckDbStore>>>,
+        cx: &mut Context<Self>,
     ) -> Self {
         let base_arc: Arc<[Candle]> = base_candles.into();
         let (candles, interval) = match meta.initial_interval {
@@ -195,6 +199,7 @@ impl ChartView {
         let (price_min, price_max) = padded_bounds(&candles);
         let perf_from_source = parse_perf_source(&meta.source);
         Self {
+            focus_handle: cx.focus_handle(),
             base_candles: base_arc.clone(),
             candles,
             price_min,
@@ -327,6 +332,10 @@ impl ChartView {
         if self.settings_open {
             self.interval_select_open = false;
             self.symbol_search_open = false;
+            self.dragging = false;
+            self.last_drag_position = None;
+            self.hover_index = None;
+            self.hover_position = None;
         }
     }
 
@@ -350,13 +359,21 @@ impl ChartView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let was_perf = self.is_perf_mode();
         self.perf_mode = enabled;
         let _ = self.persist_session("perf_mode", if enabled { "true" } else { "false" });
 
         if enabled {
+            if was_perf {
+                return;
+            }
             let _ = self.persist_session("perf_n", &self.perf_n.to_string());
             let _ = self.persist_session("perf_step_secs", &self.perf_step_secs.to_string());
             self.start_perf_preset_load(self.perf_n, window, cx);
+            return;
+        }
+
+        if !was_perf {
             return;
         }
 
@@ -365,15 +382,66 @@ impl ChartView {
             .as_ref()
             .and_then(|store| store.lock().ok())
             .and_then(|guard| guard.get_session_value("active_source").ok().flatten());
-        if let Some(symbol) = active_source {
+
+        if let Some(active) = active_source.as_deref()
+            && active.starts_with("__PERF__")
+        {
+            self.cleanup_legacy_perf_active_source();
+        }
+
+        if let Some(symbol) = active_source
+            .filter(|symbol| !symbol.starts_with("__PERF__"))
+            .or_else(|| self.default_symbol_candidate())
+        {
+            let _ = self.persist_session("active_source", &symbol);
             self.start_symbol_load(symbol, false, window, cx);
-        } else {
-            self.source = "Search".to_string();
-            self.candles = Arc::from([]);
-            self.base_candles = Arc::from([]);
-            self.resample_cache = vec![(None, Arc::from([]))];
-            self.invalidate_render_cache();
-            window.refresh();
+            return;
+        }
+
+        self.source = "Search".to_string();
+        self.candles = Arc::from([]);
+        self.base_candles = Arc::from([]);
+        self.resample_cache = vec![(None, Arc::from([]))];
+        self.invalidate_render_cache();
+        window.refresh();
+    }
+
+    pub(crate) fn reset_settings_to_defaults(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.set_replay_mode(false);
+        self.set_perf_n(200_000);
+        self.set_perf_step_secs(60);
+        self.cleanup_legacy_perf_active_source();
+        self.set_perf_mode_enabled(false, window, cx);
+        self.close_settings();
+    }
+
+    fn default_symbol_candidate(&self) -> Option<String> {
+        if !self.source.is_empty()
+            && self.source != "Search"
+            && !self.source.starts_with("__PERF__")
+        {
+            return Some(self.source.clone());
+        }
+        self.watchlist.first().cloned()
+    }
+
+    pub(crate) fn cleanup_legacy_perf_active_source(&mut self) {
+        let Some(store) = self.store.as_ref().and_then(|store| store.lock().ok()) else {
+            return;
+        };
+        let Ok(Some(active_source)) = store.get_session_value("active_source") else {
+            return;
+        };
+        if !active_source.starts_with("__PERF__") {
+            return;
+        }
+
+        if let Some(next) = self.default_symbol_candidate() {
+            let _ = store.set_session_value("active_source", &next);
         }
     }
 

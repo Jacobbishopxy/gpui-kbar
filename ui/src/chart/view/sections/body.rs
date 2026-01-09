@@ -33,7 +33,7 @@ pub fn chart_body(
 
     let handle_mouse_down =
         cx.listener(|this: &mut ChartView, event: &MouseDownEvent, window, _| {
-            if this.symbol_search_open {
+            if this.settings_open || this.symbol_search_open {
                 return;
             }
             if event.button == MouseButton::Left {
@@ -45,6 +45,12 @@ pub fn chart_body(
         });
 
     let handle_mouse_up = cx.listener(|this: &mut ChartView, _: &MouseUpEvent, window, _| {
+        if this.settings_open {
+            this.dragging = false;
+            this.last_drag_position = None;
+            window.refresh();
+            return;
+        }
         this.dragging = false;
         this.last_drag_position = None;
         let _ = this.persist_viewport();
@@ -53,6 +59,9 @@ pub fn chart_body(
 
     let handle_mouse_move = cx.listener(
         move |this: &mut ChartView, event: &MouseMoveEvent, window, _| {
+            if this.settings_open {
+                return;
+            }
             this.handle_hover(event, candle_count);
             this.handle_drag(event, window);
         },

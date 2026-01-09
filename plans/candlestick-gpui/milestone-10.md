@@ -40,6 +40,6 @@ Status
 
 Next
 
-- [ ] Settings keyboard UX: close on `Esc`, and block chart interactions while Settings is open.
-- [ ] Replace header “…” with a dedicated settings icon asset.
-- [ ] Add Settings actions: reset to defaults and optional migration/cleanup for legacy `active_source="__PERF__..."`.
+- [x] Settings keyboard UX: close on `Esc`, and block chart interactions while Settings is open.
+- [x] Replace header “…” with a dedicated settings icon asset.
+- [x] Add Settings actions: reset to defaults and optional migration/cleanup for legacy `active_source="__PERF__..."`.

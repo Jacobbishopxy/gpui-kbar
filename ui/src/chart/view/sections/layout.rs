@@ -1,7 +1,7 @@
 use core::Interval;
 use gpui::{
-    Context, Div, MouseButton, MouseDownEvent, MouseMoveEvent, Window, div, prelude::*, px, rgb,
-    rgba,
+    Context, Div, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, Window, div,
+    prelude::*, px, rgb, rgba,
 };
 
 use crate::chart::view::{
@@ -61,7 +61,7 @@ pub(crate) fn build_root_container(header: Div, body: Div, footer: Div) -> Div {
 }
 
 pub(crate) fn build_layered_view(
-    _view: &mut ChartView,
+    view: &mut ChartView,
     cx: &mut Context<ChartView>,
     header: Div,
     body: Div,
@@ -89,6 +89,7 @@ pub(crate) fn build_layered_view(
         .w_full()
         .h_full()
         .on_children_prepainted(track_root)
+        .track_focus(&view.focus_handle)
         .child(root);
 
     if let Some(overlay) = search_overlay {
@@ -110,6 +111,26 @@ pub(crate) fn build_layered_view(
     if let Some(loading) = loading_overlay {
         layered = layered.child(loading);
     }
+
+    let handle_keys = cx.listener(|this: &mut ChartView, event: &KeyDownEvent, window, cx| {
+        if event.is_held || event.keystroke.key != "escape" {
+            return;
+        }
+
+        if this.settings_open {
+            this.close_settings();
+        } else if this.symbol_search_open {
+            this.symbol_search_open = false;
+            this.symbol_search_add_to_watchlist = false;
+        } else if this.interval_select_open {
+            this.interval_select_open = false;
+        } else {
+            return;
+        }
+
+        cx.stop_propagation();
+        window.refresh();
+    });
 
     let clear_hover = cx.listener(
         |this: &mut ChartView, event: &MouseMoveEvent, window: &mut Window, _| {
@@ -143,7 +164,7 @@ pub(crate) fn build_layered_view(
         },
     );
 
-    layered.on_mouse_move(clear_hover)
+    layered.on_key_down(handle_keys).on_mouse_move(clear_hover)
 }
 
 pub(crate) fn build_loading_overlay(view: &ChartView, cx: &mut Context<ChartView>) -> Option<Div> {
