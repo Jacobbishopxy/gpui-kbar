@@ -4,8 +4,8 @@ use gpui::{
     size,
 };
 use std::sync::{Arc, Mutex};
-use time::{Duration, OffsetDateTime};
 
+use crate::perf::{PerfSpec, generate_perf_candles, perf_label, perf_source};
 use crate::store::default_store;
 use crate::{ChartMeta, ChartView, application_with_assets};
 
@@ -113,46 +113,6 @@ impl RuntimeView {
         window.refresh();
     }
 
-    fn perf_source(n: usize, step_secs: i64) -> String {
-        format!("__PERF__ n={n} step={step_secs}s")
-    }
-
-    fn generate_perf_candles(n: usize, step_secs: i64) -> Vec<Candle> {
-        let mut state = 0x1234_5678_9abc_def0u64;
-        let mut next_f64 = || {
-            state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
-            let bits = (state >> 12) | 0x3ff0_0000_0000_0000;
-            let f = f64::from_bits(bits) - 1.0;
-            f.clamp(0.0, 1.0)
-        };
-
-        let step_secs = step_secs.max(1);
-        let start_ts =
-            OffsetDateTime::now_utc() - Duration::seconds(step_secs.saturating_mul(n as i64));
-
-        let mut price = 100.0_f64;
-        let mut candles = Vec::with_capacity(n);
-        for i in 0..n {
-            let t = start_ts + Duration::seconds(step_secs.saturating_mul(i as i64));
-            let delta = (next_f64() - 0.5) * 0.8;
-            let open = price;
-            let close = price + delta;
-            let high = open.max(close) + next_f64() * 0.4;
-            let low = open.min(close) - next_f64() * 0.4;
-            let volume = (next_f64() * 1500.0).max(1.0);
-            candles.push(Candle {
-                timestamp: t,
-                open,
-                high,
-                low,
-                close,
-                volume,
-            });
-            price = close.max(1.0);
-        }
-        candles
-    }
-
     fn restore_session(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.restored {
             return;
@@ -179,11 +139,12 @@ impl RuntimeView {
         if let Some(perf) = perf {
             let n = perf.n.max(1);
             let step_secs = perf.step_secs.max(1);
+            let spec = PerfSpec { n, step_secs };
             let load_id = self.chart.update(cx, |chart, _| {
                 chart.set_perf_n(n);
                 chart.set_perf_step_secs(step_secs);
                 chart.set_perf_mode_flag_only(true);
-                chart.begin_external_loading(format!("Perf {n}"))
+                chart.begin_external_loading(perf_label(spec))
             });
 
             let chart_entity = self.chart.clone();
@@ -191,9 +152,9 @@ impl RuntimeView {
                 .spawn(cx, async move |async_cx| {
                     let task = async_cx
                         .background_executor()
-                        .spawn(async move { Self::generate_perf_candles(n, step_secs) });
+                        .spawn(async move { generate_perf_candles(spec) });
                     let candles = task.await;
-                    let source = Self::perf_source(n, step_secs);
+                    let source = perf_source(spec);
                     async_cx
                         .update(|window, app| {
                             chart_entity.update(app, |chart, cx| {
@@ -209,14 +170,18 @@ impl RuntimeView {
         }
 
         let cached = session.as_ref().and_then(|session| {
-            session.active_source.as_deref().and_then(|source| {
-                store.lock().ok().and_then(|s| {
-                    s.load_candles(source, None)
-                        .ok()
-                        .filter(|c| !c.is_empty())
-                        .map(|candles| (source.to_string(), candles))
+            session
+                .active_source
+                .as_deref()
+                .filter(|source| !source.starts_with("__PERF__"))
+                .and_then(|source| {
+                    store.lock().ok().and_then(|s| {
+                        s.load_candles(source, None)
+                            .ok()
+                            .filter(|c| !c.is_empty())
+                            .map(|candles| (source.to_string(), candles))
+                    })
                 })
-            })
         });
 
         if let Some((source, candles)) = cached {

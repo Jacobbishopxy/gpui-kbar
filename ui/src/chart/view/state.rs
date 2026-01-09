@@ -7,7 +7,6 @@ use std::{
 use core::{Candle, Interval, LoadOptions, bounds, load_csv, resample};
 use gpui::{Bounds, Context, EventEmitter, Pixels, SharedString, Subscription, Window};
 use time::Duration;
-use time::OffsetDateTime;
 use time::macros::format_description;
 
 use super::super::ChartMeta;
@@ -15,6 +14,7 @@ use crate::data::{
     symbols::{SymbolMeta, load_symbols},
     universe::{SymbolSearchEntry, load_universe},
 };
+use crate::perf::{PerfSpec, generate_perf_candles, parse_perf_source, perf_label};
 use core::DuckDbStore;
 
 pub const QUICK_RANGE_WINDOWS: [(&str, Option<Duration>); 8] = [
@@ -126,57 +126,6 @@ fn normalize_resamples(
     cache
 }
 
-fn parse_perf_field_i64(source: &str, key: &str) -> Option<i64> {
-    let idx = source.find(key)?;
-    let rest = &source[idx + key.len()..];
-    let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
-    if digits.is_empty() {
-        return None;
-    }
-    digits.parse().ok()
-}
-
-fn perf_source(n: usize, step_secs: i64) -> String {
-    format!("__PERF__ n={n} step={step_secs}s")
-}
-
-fn generate_perf_candles(n: usize, step_secs: i64) -> Vec<Candle> {
-    let mut state = 0x1234_5678_9abc_def0u64;
-    let mut next_f64 = || {
-        state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
-        let bits = (state >> 12) | 0x3ff0_0000_0000_0000;
-        let f = f64::from_bits(bits) - 1.0;
-        f.clamp(0.0, 1.0)
-    };
-
-    let step_secs = step_secs.max(1);
-    let start_ts =
-        OffsetDateTime::now_utc() - Duration::seconds(step_secs.saturating_mul(n as i64));
-
-    let mut price = 100.0_f64;
-    let mut candles = Vec::with_capacity(n);
-    for i in 0..n {
-        let t = start_ts + Duration::seconds(step_secs.saturating_mul(i as i64));
-        let delta = (next_f64() - 0.5) * 0.8;
-        let open = price;
-        let close = price + delta;
-        let high = open.max(close) + next_f64() * 0.4;
-        let low = open.min(close) - next_f64() * 0.4;
-        let volume = (next_f64() * 1500.0).max(1.0);
-        candles.push(Candle {
-            timestamp: t,
-            open,
-            high,
-            low,
-            close,
-            volume,
-        });
-        price = close.max(1.0);
-    }
-
-    candles
-}
-
 pub struct ChartView {
     pub(super) base_candles: Arc<[Candle]>,
     pub(super) candles: Arc<[Candle]>,
@@ -201,6 +150,7 @@ pub struct ChartView {
     pub(super) interval_select_open: bool,
     pub(super) symbol_search_open: bool,
     pub(super) symbol_search_add_to_watchlist: bool,
+    force_symbol_reload: bool,
     active_range_index: usize,
     replay_mode: bool,
     pub loading_symbol: Option<String>,
@@ -251,6 +201,7 @@ impl ChartView {
             None => (base_arc.clone(), None),
         };
         let (price_min, price_max) = padded_bounds(&candles);
+        let perf_from_source = parse_perf_source(&meta.source);
         Self {
             base_candles: base_arc.clone(),
             candles,
@@ -259,9 +210,9 @@ impl ChartView {
             interval,
             source: meta.source,
             settings_open: false,
-            perf_mode: false,
-            perf_n: 200_000,
-            perf_step_secs: 60,
+            perf_mode: perf_from_source.is_some(),
+            perf_n: perf_from_source.map(|s| s.n).unwrap_or(200_000),
+            perf_step_secs: perf_from_source.map(|s| s.step_secs).unwrap_or(60),
             view_offset: 0.0,
             zoom: 1.0,
             root_origin: (0.0, 0.0),
@@ -275,6 +226,7 @@ impl ChartView {
             interval_select_open: false,
             symbol_search_open: false,
             symbol_search_add_to_watchlist: false,
+            force_symbol_reload: false,
             active_range_index: QUICK_RANGE_WINDOWS.len().saturating_sub(1),
             replay_mode: false,
             loading_symbol: None,
@@ -324,10 +276,10 @@ impl ChartView {
     fn perf_step_secs(&self) -> i64 {
         if self.is_perf_mode() {
             self.perf_step_secs.max(1)
+        } else if let Some(spec) = parse_perf_source(&self.source) {
+            spec.step_secs.max(1)
         } else {
-            parse_perf_field_i64(&self.source, "step=")
-                .unwrap_or(60)
-                .max(1)
+            60
         }
     }
 
@@ -346,16 +298,20 @@ impl ChartView {
         let _ = self.persist_session("perf_step_secs", &self.perf_step_secs.to_string());
         let load_id = self.active_load_seq.wrapping_add(1);
         self.active_load_seq = load_id;
-        self.loading_symbol = Some(format!("Perf {n}"));
         self.load_error = None;
         window.refresh();
 
         let entity = cx.entity();
+        let spec = PerfSpec {
+            n: self.perf_n,
+            step_secs: self.perf_step_secs,
+        };
+        self.loading_symbol = Some(perf_label(spec));
         window
             .spawn(cx, async move |async_cx| {
                 let task = async_cx
                     .background_executor()
-                    .spawn(async move { generate_perf_candles(n, step_secs) });
+                    .spawn(async move { generate_perf_candles(spec) });
                 let candles = task.await;
                 async_cx
                     .update(|window, app| {
@@ -363,7 +319,8 @@ impl ChartView {
                             if this.active_load_seq != load_id {
                                 return;
                             }
-                            this.replace_data(candles, perf_source(n, step_secs), false, false);
+                            let keep_source = this.source.clone();
+                            this.replace_data(candles, keep_source, false, false);
                             cx.notify();
                         });
                         window.refresh();
@@ -452,8 +409,16 @@ impl ChartView {
         }
         self.loading_symbol = None;
         self.load_error = None;
-        self.perf_mode = source.starts_with("__PERF__");
-        self.replace_data(candles, source, false, false);
+        if let Some(spec) = parse_perf_source(&source) {
+            self.perf_mode = true;
+            self.perf_n = spec.n;
+            self.perf_step_secs = spec.step_secs;
+            let keep_source = self.source.clone();
+            self.replace_data(candles, keep_source, false, false);
+        } else {
+            self.perf_mode = false;
+            self.replace_data(candles, source, false, false);
+        }
     }
 
     pub fn watchlist_symbols(&self) -> Vec<String> {
@@ -497,6 +462,9 @@ impl ChartView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.perf_mode && self.source == symbol {
+            self.force_symbol_reload = true;
+        }
         if self.perf_mode {
             self.perf_mode = false;
             let _ = self.persist_session("perf_mode", "false");
@@ -526,6 +494,8 @@ impl ChartView {
                 symbol,
                 add_to_watchlist,
             } => {
+                let force_reload = self.force_symbol_reload;
+                self.force_symbol_reload = false;
                 let interval_at_start = self.current_interval();
                 let resample_intervals =
                     collect_resample_intervals(interval_at_start, &self.resample_cache);
@@ -533,7 +503,7 @@ impl ChartView {
                 if self.loading_symbol.as_deref() == Some(symbol) {
                     return;
                 }
-                if self.source == *symbol {
+                if self.source == *symbol && !force_reload {
                     self.symbol_search_open = false;
                     window.refresh();
                     return;
@@ -744,6 +714,13 @@ impl ChartView {
             }
             if let Some(step) = session.perf_step_secs {
                 self.perf_step_secs = step.max(1);
+            }
+
+            if session.perf_n.is_none() {
+                let _ = self.persist_session("perf_n", &self.perf_n.to_string());
+            }
+            if session.perf_step_secs.is_none() {
+                let _ = self.persist_session("perf_step_secs", &self.perf_step_secs.to_string());
             }
 
             if let Some(interval) = session

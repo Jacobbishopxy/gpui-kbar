@@ -17,6 +17,7 @@ use super::state::QUICK_RANGE_WINDOWS;
 use super::widgets::{header_chip, header_icon};
 use super::{ChartView, INTERVAL_TRIGGER_WIDTH, padded_bounds};
 use crate::chart::view::overlays::settings::settings_overlay;
+use crate::perf::{PerfSpec, perf_label};
 use core::{Candle, Interval};
 use gpui::{
     Context, Div, MouseButton, MouseDownEvent, Render, SharedString, Window, div, prelude::*, px,
@@ -166,17 +167,10 @@ impl RenderState {
             _ => ("--".to_string(), 0x9ca3af),
         };
         let symbol_label = if view.is_perf_mode() {
-            fn format_perf_n(n: usize) -> String {
-                if n >= 1_000_000 && n % 1_000_000 == 0 {
-                    format!("{}M", n / 1_000_000)
-                } else if n >= 1_000 && n % 1_000 == 0 {
-                    format!("{}k", n / 1_000)
-                } else {
-                    n.to_string()
-                }
-            }
-
-            format!("Perf {}", format_perf_n(view.perf_n.max(1)))
+            perf_label(PerfSpec {
+                n: view.perf_n,
+                step_secs: view.perf_step_secs,
+            })
         } else {
             Path::new(&view.source)
                 .file_name()

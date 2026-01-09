@@ -98,7 +98,7 @@ pub fn settings_overlay(view: &mut ChartView, cx: &mut Context<ChartView>) -> Op
             .gap_1()
             .child(chip_button(
                 "50k",
-                perf_mode && n == 50_000,
+                n == 50_000,
                 |this, _, window, cx| {
                     this.set_perf_n(50_000);
                     this.set_perf_mode_enabled(true, window, cx);
@@ -107,7 +107,7 @@ pub fn settings_overlay(view: &mut ChartView, cx: &mut Context<ChartView>) -> Op
             ))
             .child(chip_button(
                 "200k",
-                perf_mode && n == 200_000,
+                n == 200_000,
                 |this, _, window, cx| {
                     this.set_perf_n(200_000);
                     this.set_perf_mode_enabled(true, window, cx);
@@ -116,7 +116,7 @@ pub fn settings_overlay(view: &mut ChartView, cx: &mut Context<ChartView>) -> Op
             ))
             .child(chip_button(
                 "1M",
-                perf_mode && n == 1_000_000,
+                n == 1_000_000,
                 |this, _, window, cx| {
                     this.set_perf_n(1_000_000);
                     this.set_perf_mode_enabled(true, window, cx);
@@ -133,7 +133,7 @@ pub fn settings_overlay(view: &mut ChartView, cx: &mut Context<ChartView>) -> Op
             .gap_1()
             .child(chip_button(
                 "1s",
-                perf_mode && step == 1,
+                step == 1,
                 |this, _, window, cx| {
                     this.set_perf_step_secs(1);
                     if this.perf_mode {
@@ -144,7 +144,7 @@ pub fn settings_overlay(view: &mut ChartView, cx: &mut Context<ChartView>) -> Op
             ))
             .child(chip_button(
                 "60s",
-                perf_mode && step == 60,
+                step == 60,
                 |this, _, window, cx| {
                     this.set_perf_step_secs(60);
                     if this.perf_mode {
@@ -155,7 +155,7 @@ pub fn settings_overlay(view: &mut ChartView, cx: &mut Context<ChartView>) -> Op
             ))
             .child(chip_button(
                 "300s",
-                perf_mode && step == 300,
+                step == 300,
                 |this, _, window, cx| {
                     this.set_perf_step_secs(300);
                     if this.perf_mode {
