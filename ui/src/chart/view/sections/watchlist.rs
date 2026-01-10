@@ -96,7 +96,7 @@ fn watchlist_list(view: &mut ChartView, cx: &mut Context<ChartView>) -> gpui::St
         let hover_bg_hex = if active || is_loading {
             0x1f2937
         } else {
-            0x111827
+            0x1f2937
         };
         let active_bg_hex = if active || is_loading {
             0x0f172a
