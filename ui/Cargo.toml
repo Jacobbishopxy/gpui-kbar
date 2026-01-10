@@ -10,6 +10,10 @@ gpui-component.workspace = true
 time.workspace = true
 anyhow.workspace = true
 csv = "1.3"
+flux-schema.workspace = true
+flatbuffers.workspace = true
+tokio.workspace = true
+zeromq.workspace = true
 
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }

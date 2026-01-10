@@ -75,19 +75,29 @@ pub fn settings_overlay(view: &mut ChartView, cx: &mut Context<ChartView>) -> Op
     });
 
     let perf_mode = view.perf_mode;
+    let live_mode = view.live_mode;
     let n = view.perf_n;
     let step = view.perf_step_secs;
 
-    let perf_mode_row = row(
-        "Mode",
+    let source_row = row(
+        "Source",
         div()
             .flex()
             .items_center()
             .gap_2()
             .child(chip_button(
-                "Real",
-                !perf_mode,
-                |this, _, window, cx| this.set_perf_mode_enabled(false, window, cx),
+                "File",
+                !perf_mode && !live_mode,
+                |this, _, window, cx| {
+                    this.set_perf_mode_enabled(false, window, cx);
+                    this.set_live_mode_enabled(false, window, cx);
+                },
+                cx,
+            ))
+            .child(chip_button(
+                "Live",
+                live_mode,
+                |this, _, window, cx| this.set_live_mode_enabled(true, window, cx),
                 cx,
             ))
             .child(chip_button(
@@ -216,6 +226,11 @@ pub fn settings_overlay(view: &mut ChartView, cx: &mut Context<ChartView>) -> Op
         ),
     );
 
+    let mut data_section = div().flex().flex_col().gap_3().child(source_row);
+    if perf_mode {
+        data_section = data_section.child(perf_dataset_row).child(perf_step_row);
+    }
+
     let panel = div()
         .w(px(360.))
         .bg(rgb(0x0b1220))
@@ -257,14 +272,8 @@ pub fn settings_overlay(view: &mut ChartView, cx: &mut Context<ChartView>) -> Op
                 )),
         )
         .child(section(
-            "Performance",
-            div()
-                .flex()
-                .flex_col()
-                .gap_3()
-                .child(perf_mode_row)
-                .child(perf_dataset_row)
-                .child(perf_step_row),
+            "Data",
+            data_section,
         ))
         .child(section(
             "Chart",

@@ -41,6 +41,11 @@ pub struct UserSession {
     pub perf_mode: Option<bool>,
     pub perf_n: Option<usize>,
     pub perf_step_secs: Option<i64>,
+    pub live_mode: Option<bool>,
+    pub live_pub: Option<String>,
+    pub chunk_rep: Option<String>,
+    pub live_source_id: Option<String>,
+    pub live_interval: Option<String>,
 }
 
 #[derive(Debug, Error)]
@@ -424,6 +429,11 @@ impl DuckDbStore {
         let perf_step_secs = self
             .get_session_value("perf_step_secs")?
             .and_then(|v| v.parse::<i64>().ok());
+        let live_mode = self.get_session_value("live_mode")?.map(|v| v == "true");
+        let live_pub = self.get_session_value("live_pub")?;
+        let chunk_rep = self.get_session_value("chunk_rep")?;
+        let live_source_id = self.get_session_value("live_source_id")?;
+        let live_interval = self.get_session_value("live_interval")?;
 
         Ok(UserSession {
             active_source,
@@ -436,6 +446,11 @@ impl DuckDbStore {
             perf_mode,
             perf_n,
             perf_step_secs,
+            live_mode,
+            live_pub,
+            chunk_rep,
+            live_source_id,
+            live_interval,
         })
     }
 }
@@ -661,6 +676,21 @@ mod tests {
             .set_session_value("perf_step_secs", "60")
             .expect("perf_step_secs");
         store
+            .set_session_value("live_mode", "true")
+            .expect("live_mode");
+        store
+            .set_session_value("live_pub", "tcp://127.0.0.1:5556")
+            .expect("live_pub");
+        store
+            .set_session_value("chunk_rep", "tcp://127.0.0.1:5557")
+            .expect("chunk_rep");
+        store
+            .set_session_value("live_source_id", "SIM")
+            .expect("live_source_id");
+        store
+            .set_session_value("live_interval", "1s")
+            .expect("live_interval");
+        store
             .set_watchlist(&["TSLA".to_string(), "AAPL".to_string()])
             .expect("watchlist");
 
@@ -688,5 +718,10 @@ mod tests {
         assert_eq!(session.perf_mode, Some(true));
         assert_eq!(session.perf_n, Some(200000));
         assert_eq!(session.perf_step_secs, Some(60));
+        assert_eq!(session.live_mode, Some(true));
+        assert_eq!(session.live_pub.as_deref(), Some("tcp://127.0.0.1:5556"));
+        assert_eq!(session.chunk_rep.as_deref(), Some("tcp://127.0.0.1:5557"));
+        assert_eq!(session.live_source_id.as_deref(), Some("SIM"));
+        assert_eq!(session.live_interval.as_deref(), Some("1s"));
     }
 }

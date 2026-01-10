@@ -16,8 +16,13 @@ use crate::data::{
     symbols::{SymbolMeta, load_symbols},
     universe::{SymbolSearchEntry, load_universe},
 };
+use crate::live::{
+    DEFAULT_BACKFILL_LIMIT, LiveConfig, LiveEvent, backfill_candles, subscribe_candles,
+    tokio_runtime,
+};
 use crate::perf::{PerfSpec, generate_perf_candles, parse_perf_source, perf_label};
 use core::DuckDbStore;
+use tokio::sync::mpsc;
 
 pub const QUICK_RANGE_WINDOWS: [(&str, Option<Duration>); 8] = [
     ("1D", Some(Duration::days(1))),
@@ -36,6 +41,7 @@ struct LoadResult {
     base: Arc<[Candle]>,
     resamples: Vec<(Option<Interval>, Arc<[Candle]>)>,
     needs_persist: bool,
+    live_last_sequence: Option<u64>,
 }
 
 #[derive(Clone)]
@@ -132,6 +138,11 @@ pub struct ChartView {
     pub(super) perf_mode: bool,
     pub(super) perf_n: usize,
     pub(super) perf_step_secs: i64,
+    pub(super) live_mode: bool,
+    pub(super) live_config: LiveConfig,
+    live_generation: u64,
+    live_last_sequence: u64,
+    live_task: Option<tokio::task::JoinHandle<()>>,
     pub(super) view_offset: f32,
     pub(super) zoom: f32,
     pub(super) root_origin: (f32, f32),
@@ -210,6 +221,11 @@ impl ChartView {
             perf_mode: perf_from_source.is_some(),
             perf_n: perf_from_source.map(|s| s.n).unwrap_or(200_000),
             perf_step_secs: perf_from_source.map(|s| s.step_secs).unwrap_or(60),
+            live_mode: false,
+            live_config: LiveConfig::default(),
+            live_generation: 0,
+            live_last_sequence: 0,
+            live_task: None,
             view_offset: 0.0,
             zoom: 1.0,
             root_origin: (0.0, 0.0),
@@ -360,6 +376,9 @@ impl ChartView {
         cx: &mut Context<Self>,
     ) {
         let was_perf = self.is_perf_mode();
+        if enabled {
+            self.set_live_mode_flag_only(false);
+        }
         self.perf_mode = enabled;
         let _ = self.persist_session("perf_mode", if enabled { "true" } else { "false" });
 
@@ -415,6 +434,7 @@ impl ChartView {
         self.set_perf_n(200_000);
         self.set_perf_step_secs(60);
         self.cleanup_legacy_perf_active_source();
+        self.set_live_mode_enabled(false, window, cx);
         self.set_perf_mode_enabled(false, window, cx);
         self.close_settings();
     }
@@ -448,6 +468,57 @@ impl ChartView {
     pub(crate) fn set_perf_mode_flag_only(&mut self, enabled: bool) {
         self.perf_mode = enabled;
         let _ = self.persist_session("perf_mode", if enabled { "true" } else { "false" });
+    }
+
+    pub(crate) fn set_live_mode_enabled(
+        &mut self,
+        enabled: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if enabled {
+            self.perf_mode = false;
+            let _ = self.persist_session("perf_mode", "false");
+        }
+
+        let was_live = self.live_mode;
+        self.live_mode = enabled;
+        let _ = self.persist_session("live_mode", if enabled { "true" } else { "false" });
+
+        if enabled {
+            if was_live {
+                return;
+            }
+            let _ = self.persist_session("live_pub", &self.live_config.live_pub);
+            let _ = self.persist_session("chunk_rep", &self.live_config.chunk_rep);
+            let _ = self.persist_session("live_source_id", &self.live_config.source_id);
+            let _ = self.persist_session("live_interval", &self.live_config.interval);
+            self.start_symbol_load(self.source.clone(), false, window, cx);
+            return;
+        }
+
+        if !was_live {
+            return;
+        }
+
+        self.stop_live_subscription();
+        self.start_symbol_load(self.source.clone(), false, window, cx);
+    }
+
+    fn set_live_mode_flag_only(&mut self, enabled: bool) {
+        self.live_mode = enabled;
+        let _ = self.persist_session("live_mode", if enabled { "true" } else { "false" });
+        if !enabled {
+            self.stop_live_subscription();
+        }
+    }
+
+    fn stop_live_subscription(&mut self) {
+        self.live_generation = self.live_generation.wrapping_add(1);
+        self.live_last_sequence = 0;
+        if let Some(task) = self.live_task.take() {
+            task.abort();
+        }
     }
 
     pub(crate) fn begin_external_loading(&mut self, label: String) -> u64 {
@@ -529,6 +600,9 @@ impl ChartView {
             self.perf_mode = false;
             let _ = self.persist_session("perf_mode", "false");
         }
+        if !self.live_mode {
+            self.stop_live_subscription();
+        }
         self.ensure_load_subscription(window, cx);
         cx.emit(LoadMsg::Start {
             symbol,
@@ -565,6 +639,73 @@ impl ChartView {
                 if self.source == *symbol && !force_reload {
                     self.symbol_search_open = false;
                     window.refresh();
+                    return;
+                }
+
+                if self.live_mode {
+                    self.stop_live_subscription();
+
+                    let cfg = self.live_config.clone();
+                    let load_id = self.active_load_seq.wrapping_add(1);
+                    self.active_load_seq = load_id;
+                    self.loading_symbol = Some(symbol.clone());
+                    self.load_error = None;
+                    self.symbol_search_open = false;
+                    window.refresh();
+
+                    let entity = cx.entity();
+                    let symbol_for_task = symbol.clone();
+                    let add_to_watchlist = *add_to_watchlist;
+                    let resample_intervals = resample_intervals.clone();
+
+                    window
+                        .spawn(cx, async move |async_cx| {
+                            let symbol_for_backfill = symbol_for_task.clone();
+                            let handle = tokio_runtime().spawn(async move {
+                                backfill_candles(
+                                    &cfg,
+                                    &symbol_for_backfill,
+                                    None,
+                                    DEFAULT_BACKFILL_LIMIT,
+                                )
+                                .await
+                            });
+
+                            let result = match handle.await {
+                                Ok(Ok((start_sequence, candles))) => {
+                                    let base_arc: Arc<[Candle]> = Arc::from(candles);
+                                    let resamples = build_resamples(&base_arc, &resample_intervals);
+                                    let last_sequence = base_arc
+                                        .len()
+                                        .checked_sub(1)
+                                        .map(|idx| start_sequence.saturating_add(idx as u64));
+                                    Ok(LoadResult {
+                                        symbol: symbol_for_task.clone(),
+                                        base: base_arc,
+                                        resamples,
+                                        needs_persist: false,
+                                        live_last_sequence: last_sequence,
+                                    })
+                                }
+                                Ok(Err(err)) => Err(err),
+                                Err(err) => Err(format!("live task join failed: {err}")),
+                            };
+
+                            async_cx
+                                .update(|window, app| {
+                                    entity.update(app, |_, cx| {
+                                        cx.emit(LoadMsg::Finished {
+                                            load_id,
+                                            add_to_watchlist,
+                                            result,
+                                        });
+                                    });
+                                    window.refresh();
+                                })
+                                .ok();
+                        })
+                        .detach();
+
                     return;
                 }
 
@@ -611,6 +752,7 @@ impl ChartView {
                                         base: base_arc,
                                         resamples,
                                         needs_persist: false,
+                                        live_last_sequence: None,
                                     });
                                 }
                             }
@@ -633,6 +775,7 @@ impl ChartView {
                                     base: base_arc,
                                     resamples,
                                     needs_persist: store_for_task.is_some(),
+                                    live_last_sequence: None,
                                 })
                             }
                         });
@@ -711,16 +854,25 @@ impl ChartView {
                         symbol,
                         base,
                         resamples,
+                        live_last_sequence,
                         ..
                     }) => {
                         self.load_error = None;
                         self.replace_data_from_load(
                             base,
                             resamples,
-                            symbol,
+                            symbol.clone(),
                             false,
                             *add_to_watchlist,
                         );
+                        if self.live_mode {
+                            if let Some(last) = live_last_sequence {
+                                self.live_last_sequence = last;
+                            } else {
+                                self.live_last_sequence = 0;
+                            }
+                            self.start_live_subscription(*load_id, symbol.clone(), window, cx);
+                        }
                         persist_snapshot = Some(PersistSnapshot {
                             store: self.store.clone(),
                             source: self.source.clone(),
@@ -766,6 +918,91 @@ impl ChartView {
         }
     }
 
+    fn start_live_subscription(
+        &mut self,
+        load_id: u64,
+        symbol: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.stop_live_subscription();
+        self.live_generation = load_id;
+
+        let (tx, mut rx) = mpsc::unbounded_channel::<LiveEvent>();
+        let cfg = self.live_config.clone();
+        let entity = cx.entity();
+
+        self.live_task = Some(tokio_runtime().spawn(async move {
+            if let Err(err) = subscribe_candles(cfg, symbol, tx.clone()).await {
+                let _ = tx.send(LiveEvent::Error(err));
+            }
+        }));
+
+        window
+            .spawn(cx, async move |async_cx| {
+                while let Some(event) = rx.recv().await {
+                    async_cx
+                        .update(|window, app| {
+                            entity.update(app, |this, cx| {
+                                if !this.live_mode || this.live_generation != load_id {
+                                    return;
+                                }
+                                this.apply_live_event(event);
+                                cx.notify();
+                            });
+                            window.refresh();
+                        })
+                        .ok();
+                }
+            })
+            .detach();
+    }
+
+    fn apply_live_event(&mut self, event: LiveEvent) {
+        match event {
+            LiveEvent::CandleBatch {
+                start_sequence,
+                candles,
+            } => self.append_live_batch(start_sequence, candles),
+            LiveEvent::Error(err) => {
+                self.load_error = Some(err);
+            }
+        }
+    }
+
+    fn append_live_batch(&mut self, start_sequence: u64, mut candles: Vec<Candle>) {
+        if candles.is_empty() {
+            return;
+        }
+
+        let last_seq = start_sequence
+            .saturating_add(candles.len().saturating_sub(1) as u64);
+        if last_seq <= self.live_last_sequence {
+            return;
+        }
+
+        if start_sequence <= self.live_last_sequence {
+            let skip = (self.live_last_sequence - start_sequence + 1) as usize;
+            if skip >= candles.len() {
+                return;
+            }
+            candles.drain(0..skip);
+        }
+
+        let mut base: Vec<Candle> = self.base_candles.iter().cloned().collect();
+        base.extend(candles);
+        self.live_last_sequence = last_seq;
+
+        let base_arc: Arc<[Candle]> = Arc::from(base);
+        self.base_candles = base_arc.clone();
+        self.resample_cache = vec![(None, base_arc.clone())];
+        self.candles = self.resampled_for(self.interval);
+        self.invalidate_render_cache();
+
+        let visible_count = self.visible_len().round().max(1.0) as usize;
+        self.view_offset = self.clamp_offset(self.view_offset, visible_count);
+    }
+
     pub fn hydrate_from_store(&mut self) {
         if self.hydrated {
             return;
@@ -786,6 +1023,22 @@ impl ChartView {
             }
             if let Some(step) = session.perf_step_secs {
                 self.perf_step_secs = step.max(1);
+            }
+
+            if let Some(live_mode) = session.live_mode {
+                self.live_mode = live_mode;
+            }
+            if let Some(live_pub) = session.live_pub {
+                self.live_config.live_pub = live_pub;
+            }
+            if let Some(chunk_rep) = session.chunk_rep {
+                self.live_config.chunk_rep = chunk_rep;
+            }
+            if let Some(source_id) = session.live_source_id {
+                self.live_config.source_id = source_id;
+            }
+            if let Some(interval) = session.live_interval {
+                self.live_config.interval = interval;
             }
 
             if session.perf_n.is_none() {

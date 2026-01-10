@@ -1,6 +1,7 @@
 mod assets;
 mod chart;
 pub mod components;
+mod live;
 pub mod perf;
 mod runtime;
 

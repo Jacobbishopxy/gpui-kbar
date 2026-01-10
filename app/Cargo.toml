@@ -10,3 +10,4 @@ gpui.workspace = true
 clap.workspace = true
 anyhow.workspace = true
 time.workspace = true
+flux-schema.workspace = true
