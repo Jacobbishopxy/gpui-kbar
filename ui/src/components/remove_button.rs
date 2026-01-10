@@ -1,4 +1,4 @@
-use gpui::{Div, MouseButton, MouseDownEvent, div, prelude::*, px, rgb, svg};
+use gpui::{Div, MouseButton, MouseDownEvent, div, prelude::*, px, rgb, rgba, svg};
 
 pub fn remove_button(
     handler: impl Fn(&MouseDownEvent, &mut gpui::Window, &mut gpui::App) + 'static,
@@ -9,6 +9,8 @@ pub fn remove_button(
         .flex()
         .items_center()
         .justify_center()
+        .rounded_full()
+        .bg(rgba(0x00000000))
         .on_mouse_down(MouseButton::Left, handler)
         .child(
             svg()

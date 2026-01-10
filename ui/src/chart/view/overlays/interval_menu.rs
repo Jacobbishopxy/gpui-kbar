@@ -2,6 +2,7 @@ use core::Interval;
 use gpui::{Div, MouseButton, SharedString, div, prelude::*, px, rgb};
 
 use crate::chart::view::{ChartView, OVERLAY_GAP};
+use crate::components::button_effect;
 
 pub fn interval_menu(
     view: &mut ChartView,
@@ -38,24 +39,23 @@ pub fn interval_menu(
                 window.refresh();
             },
         );
-        let bg = if is_active {
-            rgb(0x1f2937)
-        } else {
-            rgb(0x0f172a)
-        };
+        let bg_hex = if is_active { 0x1f2937 } else { 0x0f172a };
         let text = SharedString::from(label.to_string());
+        let option_id: SharedString = format!("interval-menu-option-{label}").into();
 
-        menu = menu.child(
+        menu = menu.child(button_effect::apply(
             div()
                 .px_3()
                 .py_2()
                 .w(px(menu_width))
-                .bg(bg)
+                .bg(rgb(bg_hex))
                 .text_sm()
                 .text_color(gpui::white())
                 .on_mouse_down(MouseButton::Left, handler)
-                .child(text),
-        );
+                .child(text)
+                .id(option_id),
+            bg_hex,
+        ));
     }
 
     Some(menu)

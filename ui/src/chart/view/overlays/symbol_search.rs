@@ -1,6 +1,7 @@
 use gpui::{Context, Div, MouseButton, MouseDownEvent, div, prelude::*, px, rgb, rgba};
 
 use crate::chart::view::ChartView;
+use crate::components::button_effect;
 use crate::components::close_button::close_button;
 use crate::components::loading_sand::loading_sand;
 
@@ -25,24 +26,27 @@ pub fn symbol_search_overlay(view: &mut ChartView, cx: &mut Context<ChartView>) 
     let mut filters = div().flex().items_center().gap_2();
     for label in search_filters.iter() {
         let active = *label == active_filter;
-        let bg = if active { rgb(0x1f2937) } else { rgb(0x111827) };
+        let bg_hex = if active { 0x1f2937 } else { 0x111827 };
         let text = if active { rgb(0xffffff) } else { rgb(0x9ca3af) };
+        let filter_id: gpui::SharedString = format!("symbol-search-filter-{label}").into();
         let filter_label = label.to_string();
         let set_filter = cx.listener(move |this: &mut ChartView, _: &MouseDownEvent, window, _| {
             this.set_symbol_search_filter(&filter_label);
             window.refresh();
         });
-        filters = filters.child(
+        filters = filters.child(button_effect::apply(
             div()
                 .px_2()
                 .py_1()
                 .rounded_md()
-                .bg(bg)
+                .bg(rgb(bg_hex))
                 .text_xs()
                 .text_color(text)
                 .on_mouse_down(MouseButton::Left, set_filter)
-                .child(*label),
-        );
+                .child(*label)
+                .id(filter_id),
+            bg_hex,
+        ));
     }
 
     let filtered: Vec<&_> = view
@@ -79,9 +83,10 @@ pub fn symbol_search_overlay(view: &mut ChartView, cx: &mut Context<ChartView>) 
     }
     for (idx, entry) in filtered.into_iter().enumerate() {
         let active = idx == 0;
-        let row_bg = if active { rgb(0x0f172a) } else { rgb(0x0b1220) };
+        let row_bg_hex = if active { 0x0f172a } else { 0x0b1220 };
         let border_color = if active { rgb(0x2563eb) } else { rgb(0x1f2937) };
         let symbol = entry.symbol.clone();
+        let row_id: gpui::SharedString = format!("symbol-search-row-{symbol}").into();
         let is_loading = loading_symbol.as_deref() == Some(&symbol);
         let on_select = cx.listener(
             move |this: &mut ChartView, _: &MouseDownEvent, window, cx| {
@@ -89,86 +94,90 @@ pub fn symbol_search_overlay(view: &mut ChartView, cx: &mut Context<ChartView>) 
             },
         );
 
-        let mut row = div()
-            .px_3()
-            .py_2()
-            .flex()
-            .items_center()
-            .justify_between()
-            .bg(row_bg)
-            .on_mouse_down(MouseButton::Left, on_select)
-            .child({
-                let mut left = div().flex().items_center().gap_3();
-                if is_loading {
-                    left = left.child(loading_sand(16.0, rgb(0xf59e0b)));
-                }
-                left.child(
-                    div()
-                        .w(px(32.))
-                        .h(px(32.))
-                        .rounded_full()
-                        .bg(rgb(0x1f2937))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .text_sm()
-                        .text_color(gpui::white())
-                        .child(entry.badge.clone()),
-                )
+        let mut row = button_effect::apply(
+            div()
+                .px_3()
+                .py_2()
+                .flex()
+                .items_center()
+                .justify_between()
+                .bg(rgb(row_bg_hex))
+                .on_mouse_down(MouseButton::Left, on_select)
+                .child({
+                    let mut left = div().flex().items_center().gap_3();
+                    if is_loading {
+                        left = left.child(loading_sand(16.0, rgb(0xf59e0b)));
+                    }
+                    left.child(
+                        div()
+                            .w(px(32.))
+                            .h(px(32.))
+                            .rounded_full()
+                            .bg(rgb(0x1f2937))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .text_sm()
+                            .text_color(gpui::white())
+                            .child(entry.badge.clone()),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .text_color(gpui::white())
+                                            .child(entry.symbol.clone()),
+                                    )
+                                    .child(
+                                        div()
+                                            .px_2()
+                                            .py_1()
+                                            .rounded_sm()
+                                            .bg(rgb(0x1f2937))
+                                            .text_xs()
+                                            .text_color(rgb(0x9ca3af))
+                                            .child(entry.market.clone()),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(rgb(0x9ca3af))
+                                    .child(entry.name.clone()),
+                            ),
+                    )
+                })
                 .child(
                     div()
                         .flex()
-                        .flex_col()
-                        .gap_1()
+                        .items_center()
+                        .gap_2()
+                        .text_xs()
+                        .text_color(rgb(0x9ca3af))
+                        .child(entry.market.clone())
                         .child(
                             div()
-                                .flex()
-                                .items_center()
-                                .gap_2()
-                                .child(
-                                    div()
-                                        .text_sm()
-                                        .text_color(gpui::white())
-                                        .child(entry.symbol.clone()),
-                                )
-                                .child(
-                                    div()
-                                        .px_2()
-                                        .py_1()
-                                        .rounded_sm()
-                                        .bg(rgb(0x1f2937))
-                                        .text_xs()
-                                        .text_color(rgb(0x9ca3af))
-                                        .child(entry.market.clone()),
-                                ),
-                        )
-                        .child(
-                            div()
+                                .px_2()
+                                .py_1()
+                                .rounded_sm()
+                                .bg(rgb(0x1f2937))
                                 .text_xs()
-                                .text_color(rgb(0x9ca3af))
-                                .child(entry.name.clone()),
+                                .text_color(gpui::white())
+                                .child(entry.venue.clone()),
                         ),
                 )
-            })
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .text_xs()
-                    .text_color(rgb(0x9ca3af))
-                    .child(entry.market.clone())
-                    .child(
-                        div()
-                            .px_2()
-                            .py_1()
-                            .rounded_sm()
-                            .bg(rgb(0x1f2937))
-                            .text_xs()
-                            .text_color(gpui::white())
-                            .child(entry.venue.clone()),
-                    ),
-            );
+                .id(row_id),
+            row_bg_hex,
+        );
 
         row = if active {
             row.border_1().border_color(border_color)
@@ -227,7 +236,7 @@ pub fn symbol_search_overlay(view: &mut ChartView, cx: &mut Context<ChartView>) 
                                             .text_color(gpui::white())
                                             .child("Symbol Search"),
                                     )
-                                    .child(close_button(close_overlay)),
+                                    .child(close_button("symbol-search-close", close_overlay)),
                             )
                             .child(
                                 div()

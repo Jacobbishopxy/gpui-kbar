@@ -3,12 +3,13 @@ use std::path::Path;
 use gpui::{Bounds, Context, Div, MouseButton, MouseDownEvent, div, prelude::*, px, rgb, svg};
 
 use crate::chart::view::{ChartView, overlays::symbol_search::symbol_search_overlay};
+use crate::components::button_effect;
 use crate::perf::{PerfSpec, perf_label};
 
 pub fn header_controls(
     view: &mut ChartView,
     cx: &mut Context<ChartView>,
-    interval_trigger: Div,
+    interval_trigger: impl IntoElement,
 ) -> (Div, Option<Div>) {
     let toggle_symbol_search =
         cx.listener(|this: &mut ChartView, _: &MouseDownEvent, window, _| {
@@ -46,22 +47,26 @@ pub fn header_controls(
         .h(px(16.))
         .text_color(rgb(0x9ca3af));
 
-    let search_input = div()
-        .flex()
-        .items_center()
-        .gap_2()
-        .px_3()
-        .py_2()
-        .w(px(120.))
-        .rounded_md()
-        .border_1()
-        .border_color(rgb(0x1f2937))
-        .bg(rgb(0x111827))
-        .text_sm()
-        .text_color(rgb(0x9ca3af))
-        .on_mouse_down(MouseButton::Left, toggle_symbol_search)
-        .child(search_icon)
-        .child(div().text_color(gpui::white()).child(search_label));
+    let search_input = button_effect::apply(
+        div()
+            .flex()
+            .items_center()
+            .gap_2()
+            .px_3()
+            .py_2()
+            .w(px(120.))
+            .rounded_md()
+            .border_1()
+            .border_color(rgb(0x1f2937))
+            .bg(rgb(0x111827))
+            .text_sm()
+            .text_color(rgb(0x9ca3af))
+            .on_mouse_down(MouseButton::Left, toggle_symbol_search)
+            .child(search_icon)
+            .child(div().text_color(gpui::white()).child(search_label))
+            .id("symbol-search-input"),
+        0x111827,
+    );
 
     let track_header_controls = cx.processor(
         |this: &mut ChartView, bounds: Vec<Bounds<gpui::Pixels>>, _, _| {

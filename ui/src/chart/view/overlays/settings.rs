@@ -1,12 +1,13 @@
 use gpui::{
-    Context, Div, MouseButton, MouseDownEvent, MouseMoveEvent, ScrollWheelEvent, Window, div,
-    prelude::*, px, rgb, rgba, svg,
+    Context, Div, MouseButton, MouseDownEvent, MouseMoveEvent, ScrollWheelEvent, Stateful, Window,
+    div, prelude::*, px, rgb, rgba, svg,
 };
 
 use crate::chart::view::ChartView;
 use crate::chart::view::widgets::header_chip;
+use crate::components::button_effect;
 
-fn section(title: &str, content: Div) -> Div {
+fn section(title: &str, content: impl IntoElement) -> Div {
     div()
         .flex()
         .flex_col()
@@ -20,7 +21,7 @@ fn section(title: &str, content: Div) -> Div {
         .child(content)
 }
 
-fn row(label: &str, content: Div) -> Div {
+fn row(label: &str, content: impl IntoElement) -> Div {
     div()
         .flex()
         .items_center()
@@ -40,7 +41,7 @@ fn chip_button(
     active: bool,
     handle: impl Fn(&mut ChartView, &MouseDownEvent, &mut Window, &mut Context<ChartView>) + 'static,
     cx: &mut Context<ChartView>,
-) -> Div {
+) -> Stateful<Div> {
     let handle = cx.listener(handle);
     header_chip(label)
         .border_color(if active { rgb(0x2563eb) } else { rgb(0x1f2937) })
@@ -232,7 +233,7 @@ pub fn settings_overlay(view: &mut ChartView, cx: &mut Context<ChartView>) -> Op
                 .items_center()
                 .justify_between()
                 .child(div().text_lg().text_color(gpui::white()).child("Settings"))
-                .child(
+                .child(button_effect::apply(
                     div()
                         .w(px(32.))
                         .h(px(32.))
@@ -250,8 +251,10 @@ pub fn settings_overlay(view: &mut ChartView, cx: &mut Context<ChartView>) -> Op
                                 .w(px(18.))
                                 .h(px(18.))
                                 .text_color(rgb(0xe5e7eb)),
-                        ),
-                ),
+                        )
+                        .id("settings-close"),
+                    0x111827,
+                )),
         )
         .child(section(
             "Performance",

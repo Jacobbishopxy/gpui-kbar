@@ -17,6 +17,7 @@ use super::state::QUICK_RANGE_WINDOWS;
 use super::widgets::{header_chip, header_icon};
 use super::{ChartView, INTERVAL_TRIGGER_WIDTH, padded_bounds};
 use crate::chart::view::overlays::settings::settings_overlay;
+use crate::components::button_effect;
 use crate::perf::{PerfSpec, perf_label};
 use core::{Candle, Interval};
 use gpui::{
@@ -315,21 +316,25 @@ fn build_header_bar(
             window.refresh();
         });
 
-    let interval_trigger = div()
-        .flex()
-        .items_center()
-        .gap_2()
-        .px_3()
-        .py_2()
-        .w(px(INTERVAL_TRIGGER_WIDTH))
-        .rounded_md()
-        .border_1()
-        .border_color(rgb(0x1f2937))
-        .bg(rgb(0x111827))
-        .text_sm()
-        .text_color(gpui::white())
-        .on_mouse_down(MouseButton::Left, toggle_interval_select)
-        .child(state.interval_label.clone());
+    let interval_trigger = button_effect::apply(
+        div()
+            .flex()
+            .items_center()
+            .gap_2()
+            .px_3()
+            .py_2()
+            .w(px(INTERVAL_TRIGGER_WIDTH))
+            .rounded_md()
+            .border_1()
+            .border_color(rgb(0x1f2937))
+            .bg(rgb(0x111827))
+            .text_sm()
+            .text_color(gpui::white())
+            .on_mouse_down(MouseButton::Left, toggle_interval_select)
+            .child(state.interval_label.clone())
+            .id("interval-trigger"),
+        0x111827,
+    );
 
     let (header_controls, search_overlay) = header_controls(view, cx, interval_trigger);
 
@@ -340,20 +345,25 @@ fn build_header_bar(
     });
     let replay_chip = {
         let active = view.replay_enabled();
-        let bg = if active { rgb(0x1f2937) } else { rgb(0x111827) };
+        let bg_hex = if active { 0x1f2937 } else { 0x111827 };
+        let bg = rgb(bg_hex);
         let border = if active { rgb(0x2563eb) } else { rgb(0x1f2937) };
         let text = if active { rgb(0xffffff) } else { rgb(0xe5e7eb) };
-        div()
-            .px_3()
-            .py_2()
-            .rounded_md()
-            .bg(bg)
-            .border_1()
-            .border_color(border)
-            .text_sm()
-            .text_color(text)
-            .on_mouse_down(MouseButton::Left, toggle_replay)
-            .child("Replay")
+        button_effect::apply(
+            div()
+                .px_3()
+                .py_2()
+                .rounded_md()
+                .bg(bg)
+                .border_1()
+                .border_color(border)
+                .text_sm()
+                .text_color(text)
+                .on_mouse_down(MouseButton::Left, toggle_replay)
+                .child("Replay")
+                .id("replay-chip"),
+            bg_hex,
+        )
     };
 
     let toggle_settings = cx.listener(|this: &mut ChartView, _: &MouseDownEvent, window, _| {
@@ -385,6 +395,7 @@ fn build_header_bar(
                 .h(px(18.))
                 .text_color(rgb(0xe5e7eb)),
         );
+    let settings_button = button_effect::apply(settings_button.id("settings-button"), 0x111827);
 
     let header_left = div()
         .flex()
@@ -404,7 +415,7 @@ fn build_header_bar(
         .child(header_chip("Auto"));
     header_right = header_right
         .child(settings_button)
-        .child(
+        .child(button_effect::apply(
             div()
                 .px_3()
                 .py_2()
@@ -412,8 +423,10 @@ fn build_header_bar(
                 .bg(rgb(0x2563eb))
                 .text_sm()
                 .text_color(gpui::white())
-                .child("Publish"),
-        )
+                .child("Publish")
+                .id("publish-button"),
+            0x2563eb,
+        ))
         .child(
             div()
                 .w(px(32.))

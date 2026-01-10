@@ -1,23 +1,30 @@
-use gpui::{Div, SharedString, div, prelude::*, px, rgb};
+use gpui::{Div, SharedString, Stateful, div, prelude::*, px, rgb};
 
-pub(super) fn range_button(label: impl Into<SharedString>, active: bool) -> Div {
+use crate::components::button_effect;
+
+pub(super) fn range_button(label: impl Into<SharedString>, active: bool) -> Stateful<Div> {
     let label = label.into();
-    let (bg, text, border) = if active {
-        (rgb(0x1f2937), rgb(0xffffff), rgb(0x2563eb))
+    let range_id: SharedString = format!("range-button-{label}").into();
+    let (bg_hex, text, border) = if active {
+        (0x1f2937, rgb(0xffffff), rgb(0x2563eb))
     } else {
-        (rgb(0x111827), rgb(0xe5e7eb), rgb(0x1f2937))
+        (0x111827, rgb(0xe5e7eb), rgb(0x1f2937))
     };
 
-    div()
-        .px_3()
-        .py_1()
-        .rounded_md()
-        .bg(bg)
-        .border_1()
-        .border_color(border)
-        .text_sm()
-        .text_color(text)
-        .child(label)
+    button_effect::apply(
+        div()
+            .px_3()
+            .py_1()
+            .rounded_md()
+            .bg(rgb(bg_hex))
+            .border_1()
+            .border_color(border)
+            .text_sm()
+            .text_color(text)
+            .child(label)
+            .id(range_id),
+        bg_hex,
+    )
 }
 
 pub(super) fn chart_footer(

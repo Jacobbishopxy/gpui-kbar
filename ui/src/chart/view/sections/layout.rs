@@ -10,6 +10,7 @@ use crate::chart::view::{
     render::RenderState,
     widgets::{stat_row, toolbar_button},
 };
+use crate::components::button_effect;
 use crate::components::loading_sand::loading_sand;
 
 use super::sidebar::sidebar;
@@ -304,7 +305,7 @@ fn trading_stub() -> Div {
                 .text_color(rgb(0x9ca3af))
                 .child("Order ticket and positions will appear here."),
         )
-        .child(
+        .child(button_effect::apply(
             div()
                 .px_3()
                 .py_2()
@@ -312,6 +313,8 @@ fn trading_stub() -> Div {
                 .bg(rgb(0x2563eb))
                 .text_sm()
                 .text_color(gpui::white())
-                .child("Open panel"),
-        )
+                .child("Open panel")
+                .id("trading-open-panel"),
+            0x2563eb,
+        ))
 }

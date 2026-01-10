@@ -1,8 +1,11 @@
-use gpui::{Div, MouseButton, MouseDownEvent, div, prelude::*, px, rgb, svg};
+use gpui::{Div, MouseButton, MouseDownEvent, Stateful, div, prelude::*, px, rgb, svg};
+
+use crate::components::button_effect;
 
 pub fn close_button(
+    id: impl Into<gpui::ElementId>,
     handler: impl Fn(&MouseDownEvent, &mut gpui::Window, &mut gpui::App) + 'static,
-) -> Div {
+) -> Stateful<Div> {
     let mut button = div()
         .w(px(24.))
         .h(px(24.))
@@ -15,6 +18,8 @@ pub fn close_button(
         .rounded_full()
         .bg(rgb(0x1f2937))
         .text_color(gpui::white());
+    let button = button.id(id);
+    let button = button_effect::apply(button, 0x1f2937);
 
     let icon_color = rgb(0xffffff);
 

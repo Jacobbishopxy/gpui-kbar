@@ -10,3 +10,6 @@ gpui-component.workspace = true
 time.workspace = true
 anyhow.workspace = true
 csv = "1.3"
+
+[dev-dependencies]
+gpui = { workspace = true, features = ["test-support"] }
