@@ -1,5 +1,6 @@
 use std::path::Path;
 
+use core::UniverseRow;
 use csv::StringRecord;
 
 #[derive(Clone, Debug)]
@@ -54,6 +55,24 @@ pub fn load_universe(path: &str) -> Result<Vec<SymbolSearchEntry>, String> {
     Ok(entries)
 }
 
+pub fn load_universe_from_store(
+    store: &core::DuckDbStore,
+) -> Result<Vec<SymbolSearchEntry>, String> {
+    let rows = store
+        .load_universe_rows()
+        .map_err(|e| format!("failed to read universe from duckdb: {e}"))?;
+    let mut out = Vec::with_capacity(rows.len());
+    for row in rows {
+        if let Some(entry) = row_to_entry(&row) {
+            out.push(entry);
+        }
+    }
+    if out.is_empty() {
+        return Err("universe has no rows".to_string());
+    }
+    Ok(out)
+}
+
 fn record_to_entry(headers: &StringRecord, record: &StringRecord) -> Option<SymbolSearchEntry> {
     let get = |key: &str| -> String {
         headers
@@ -77,5 +96,19 @@ fn record_to_entry(headers: &StringRecord, record: &StringRecord) -> Option<Symb
         name: get("name"),
         market: get("market"),
         venue: get("venue"),
+    })
+}
+
+fn row_to_entry(row: &UniverseRow) -> Option<SymbolSearchEntry> {
+    if row.symbol.trim().is_empty() {
+        return None;
+    }
+    Some(SymbolSearchEntry {
+        filters: parse_filters(&row.filters),
+        badge: row.badge.trim().to_string(),
+        symbol: row.symbol.trim().to_string(),
+        name: row.name.trim().to_string(),
+        market: row.market.trim().to_string(),
+        venue: row.venue.trim().to_string(),
     })
 }

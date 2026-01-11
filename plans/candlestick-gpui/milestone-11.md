@@ -14,7 +14,8 @@ Status
 Notes
 
 - Mock service: `dev/src/bin/flux_mock_replay.rs`
-- Round-trip test: `ui/tests/live_roundtrip.rs`
+- Mock server supports `--limit-candles` for faster startup.
+- Round-trip test: `ui/src/live.rs`
 
 Backend notes (Flux)
 

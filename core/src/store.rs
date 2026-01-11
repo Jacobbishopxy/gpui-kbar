@@ -11,6 +11,16 @@ use time::{
 
 use crate::Candle;
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct UniverseRow {
+    pub filters: String,
+    pub badge: String,
+    pub symbol: String,
+    pub name: String,
+    pub market: String,
+    pub venue: String,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StorageMode {
     Memory,
@@ -62,11 +72,18 @@ pub enum StoreError {
     TimeFormat(#[from] Format),
 }
 
-pub struct DuckDbStore {
-    mode: StorageMode,
+#[derive(Default)]
+struct StoreBackend {
     disk_path: Option<PathBuf>,
     memory: Option<Connection>,
     disk: Option<Connection>,
+}
+
+pub struct DuckDbStore {
+    mode: StorageMode,
+    shared_disk: Option<Connection>,
+    config: StoreBackend,
+    data: StoreBackend,
 }
 
 impl DuckDbStore {
@@ -75,70 +92,110 @@ impl DuckDbStore {
     }
 
     pub fn new(path: impl AsRef<Path>, mode: StorageMode) -> Result<Self, StoreError> {
+        Self::new_split(path.as_ref(), path.as_ref(), mode)
+    }
+
+    pub fn new_split(
+        config_path: impl AsRef<Path>,
+        data_path: impl AsRef<Path>,
+        mode: StorageMode,
+    ) -> Result<Self, StoreError> {
         let mut store = Self {
             mode,
-            disk_path: Some(path.as_ref().to_path_buf()),
-            memory: None,
-            disk: None,
+            shared_disk: None,
+            config: StoreBackend {
+                disk_path: Some(config_path.as_ref().to_path_buf()),
+                ..Default::default()
+            },
+            data: StoreBackend {
+                disk_path: Some(data_path.as_ref().to_path_buf()),
+                ..Default::default()
+            },
         };
 
-        store.reconfigure(mode, Some(path))?;
-
+        store.reconfigure(mode)?;
         Ok(store)
     }
 
     pub fn set_disk_path(&mut self, path: impl AsRef<Path>) {
-        self.disk_path = Some(path.as_ref().to_path_buf());
+        let path = path.as_ref().to_path_buf();
+        self.config.disk_path = Some(path.clone());
+        self.data.disk_path = Some(path);
     }
 
     pub fn set_mode(&mut self, mode: StorageMode) -> Result<(), StoreError> {
-        self.reconfigure(mode, Option::<PathBuf>::None)?;
+        self.reconfigure(mode)?;
         Ok(())
     }
 
-    fn open_memory(&self) -> Result<Connection, StoreError> {
+    fn open_config_memory(&self) -> Result<Connection, StoreError> {
         let conn = Connection::open_in_memory()?;
-        init_schema(&conn)?;
+        init_config_schema(&conn)?;
         Ok(conn)
     }
 
-    fn open_disk(&self, path: &Path) -> Result<Connection, StoreError> {
+    fn open_data_memory(&self) -> Result<Connection, StoreError> {
+        let conn = Connection::open_in_memory()?;
+        init_data_schema(&conn)?;
+        Ok(conn)
+    }
+
+    fn open_config_disk(&self, path: &Path) -> Result<Connection, StoreError> {
         let conn = Connection::open(path)?;
-        init_schema(&conn)?;
+        init_config_schema(&conn)?;
         Ok(conn)
     }
 
-    fn reconfigure(
-        &mut self,
-        mode: StorageMode,
-        override_path: Option<impl AsRef<Path>>,
-    ) -> Result<(), StoreError> {
-        let disk_path = override_path
-            .map(|p| p.as_ref().to_path_buf())
-            .or_else(|| self.disk_path.clone());
+    fn open_data_disk(&self, path: &Path) -> Result<Connection, StoreError> {
+        let conn = Connection::open(path)?;
+        init_data_schema(&conn)?;
+        Ok(conn)
+    }
 
+    fn reconfigure(&mut self, mode: StorageMode) -> Result<(), StoreError> {
         let disk_required = matches!(mode, StorageMode::Disk | StorageMode::Both);
-        if disk_required && disk_path.is_none() {
+        if disk_required && (self.config.disk_path.is_none() || self.data.disk_path.is_none()) {
             return Err(StoreError::MissingDiskPath);
         }
 
-        self.memory = None;
-        self.disk = None;
+        self.shared_disk = None;
+        self.config.memory = None;
+        self.config.disk = None;
+        self.data.memory = None;
+        self.data.disk = None;
 
         match mode {
             StorageMode::Memory => {
-                self.memory = Some(self.open_memory()?);
+                self.config.memory = Some(self.open_config_memory()?);
+                self.data.memory = Some(self.open_data_memory()?);
             }
             StorageMode::Disk => {
-                let path = disk_path.expect("checked above");
-                self.disk_path = Some(path.clone());
-                self.disk = Some(self.open_disk(&path)?);
+                let config_path = self.config.disk_path.clone().expect("checked above");
+                let data_path = self.data.disk_path.clone().expect("checked above");
+                if config_path == data_path {
+                    let conn = Connection::open(&config_path)?;
+                    init_config_schema(&conn)?;
+                    init_data_schema(&conn)?;
+                    self.shared_disk = Some(conn);
+                } else {
+                    self.config.disk = Some(self.open_config_disk(&config_path)?);
+                    self.data.disk = Some(self.open_data_disk(&data_path)?);
+                }
             }
             StorageMode::Both => {
-                let path = disk_path.expect("checked above");
-                self.disk_path = Some(path.clone());
-                self.memory = Some(self.open_memory()?);
-                self.disk = Some(self.open_disk(&path)?);
+                let config_path = self.config.disk_path.clone().expect("checked above");
+                let data_path = self.data.disk_path.clone().expect("checked above");
+                self.config.memory = Some(self.open_config_memory()?);
+                self.data.memory = Some(self.open_data_memory()?);
+                if config_path == data_path {
+                    let conn = Connection::open(&config_path)?;
+                    init_config_schema(&conn)?;
+                    init_data_schema(&conn)?;
+                    self.shared_disk = Some(conn);
+                } else {
+                    self.config.disk = Some(self.open_config_disk(&config_path)?);
+                    self.data.disk = Some(self.open_data_disk(&data_path)?);
+                }
             }
         }
 
@@ -147,18 +204,128 @@ impl DuckDbStore {
         Ok(())
     }
 
-    fn connections(&self) -> impl Iterator<Item = &Connection> {
-        self.memory.iter().chain(self.disk.iter())
+    fn config_connections(&self) -> impl Iterator<Item = &Connection> {
+        self.config
+            .memory
+            .iter()
+            .chain(self.config.disk.iter())
+            .chain(self.shared_disk.iter())
+    }
+
+    fn data_connections(&self) -> impl Iterator<Item = &Connection> {
+        self.data
+            .memory
+            .iter()
+            .chain(self.data.disk.iter())
+            .chain(self.shared_disk.iter())
+    }
+
+    pub fn migrate_legacy_cache_to_split(
+        legacy_cache: impl AsRef<Path>,
+        config_path: impl AsRef<Path>,
+        data_path: impl AsRef<Path>,
+    ) -> Result<(), StoreError> {
+        let legacy_cache = legacy_cache.as_ref();
+        let config_path = config_path.as_ref();
+        let data_path = data_path.as_ref();
+
+        if !legacy_cache.exists() {
+            return Ok(());
+        }
+
+        let should_migrate_config = !config_path.exists();
+        let should_migrate_data = !data_path.exists();
+        if !should_migrate_config && !should_migrate_data {
+            return Ok(());
+        }
+
+        if should_migrate_config {
+            let conn = Connection::open(config_path)?;
+            init_config_schema(&conn)?;
+            attach_and_copy(
+                &conn,
+                legacy_cache,
+                &[
+                    "INSERT INTO session_state SELECT * FROM legacy.session_state",
+                    "INSERT INTO watchlist SELECT * FROM legacy.watchlist",
+                ],
+            )?;
+        }
+
+        if should_migrate_data {
+            let conn = Connection::open(data_path)?;
+            init_data_schema(&conn)?;
+            attach_and_copy(
+                &conn,
+                legacy_cache,
+                &[
+                    "INSERT INTO candles SELECT * FROM legacy.candles",
+                    "INSERT INTO indicator_values SELECT * FROM legacy.indicator_values",
+                ],
+            )?;
+        }
+
+        Ok(())
+    }
+
+    pub fn ensure_universe_loaded(&self, csv_path: impl AsRef<Path>) -> Result<(), StoreError> {
+        let csv_path = csv_path.as_ref();
+        if !csv_path.exists() {
+            return Ok(());
+        }
+        let sql_path = csv_path.to_string_lossy().replace('\'', "''");
+
+        for conn in self.data_connections() {
+            let mut stmt = conn.prepare("SELECT COUNT(*) FROM universe")?;
+            let mut rows = stmt.query([])?;
+            let count: i64 = rows.next()?.and_then(|row| row.get(0).ok()).unwrap_or(0);
+            if count > 0 {
+                continue;
+            }
+            conn.execute_batch(&format!(
+                "INSERT INTO universe
+                 SELECT filters, badge, symbol, name, market, venue
+                 FROM read_csv_auto('{sql_path}', HEADER=true);"
+            ))?;
+        }
+
+        Ok(())
+    }
+
+    pub fn load_universe_rows(&self) -> Result<Vec<UniverseRow>, StoreError> {
+        let mut out = Vec::new();
+        for conn in self.data_connections() {
+            let mut stmt = conn.prepare(
+                "SELECT filters, badge, symbol, name, market, venue
+                 FROM universe
+                 ORDER BY symbol ASC",
+            )?;
+            let mut rows = stmt.query([])?;
+            while let Some(row) = rows.next()? {
+                out.push(UniverseRow {
+                    filters: row.get(0)?,
+                    badge: row.get(1)?,
+                    symbol: row.get(2)?,
+                    name: row.get(3)?,
+                    market: row.get(4)?,
+                    venue: row.get(5)?,
+                });
+            }
+            if !out.is_empty() {
+                return Ok(out);
+            }
+        }
+        Ok(out)
     }
 
     pub fn write_candles(&self, symbol: &str, candles: &[Candle]) -> Result<(), StoreError> {
-        if self.connections().count() == 0 {
+        if self.data_connections().count() == 0 {
             return Err(StoreError::NoBackend);
         }
 
         let deduped = dedup_by_timestamp(candles);
 
-        for conn in self.connections() {
+        for conn in self.data_connections() {
             // Replace any existing rows for this symbol to avoid duplicates when reloading.
             //
             // Use an appender for bulk insertion; row-by-row `execute` is noticeably slower
@@ -201,7 +368,7 @@ impl DuckDbStore {
     ///
     /// Existing rows in the appended time span are deleted first to avoid duplicate timestamps.
     pub fn append_candles(&self, symbol: &str, candles: &[Candle]) -> Result<(), StoreError> {
-        if self.connections().count() == 0 {
+        if self.data_connections().count() == 0 {
             return Err(StoreError::NoBackend);
         }
         if candles.is_empty() {
@@ -216,7 +383,7 @@ impl DuckDbStore {
         let min_ts = min_ts.format(&Rfc3339)?;
         let max_ts = max_ts.format(&Rfc3339)?;
 
-        for conn in self.connections() {
+        for conn in self.data_connections() {
             conn.execute_batch("BEGIN TRANSACTION")?;
             let result: Result<(), StoreError> = (|| {
                 conn.execute(
@@ -260,7 +427,7 @@ impl DuckDbStore {
         range: Option<DataRange>,
     ) -> Result<Vec<Candle>, StoreError> {
         let mut result = Vec::new();
-        for conn in self.connections() {
+        for conn in self.data_connections() {
             let mut conditions = vec!["symbol = ?".to_string()];
             let mut params: Vec<String> = vec![symbol.to_string()];
 
@@ -330,11 +497,11 @@ impl DuckDbStore {
         indicator: &str,
         values: &[(OffsetDateTime, f64)],
     ) -> Result<(), StoreError> {
-        if self.connections().count() == 0 {
+        if self.data_connections().count() == 0 {
             return Err(StoreError::NoBackend);
         }
 
-        for conn in self.connections() {
+        for conn in self.data_connections() {
             let mut stmt = conn.prepare(
                 "INSERT INTO indicator_values (symbol, indicator, timestamp, value)
                  VALUES (?1, ?2, ?3, ?4)",
@@ -355,7 +522,7 @@ impl DuckDbStore {
         range: Option<DataRange>,
     ) -> Result<Vec<(OffsetDateTime, f64)>, StoreError> {
         let mut result = Vec::new();
-        for conn in self.connections() {
+        for conn in self.data_connections() {
             let mut conditions = vec!["symbol = ?".to_string(), "indicator = ?".to_string()];
             let mut params: Vec<String> = vec![symbol.to_string(), indicator.to_string()];
 
@@ -409,10 +576,10 @@ impl DuckDbStore {
     }
 
     pub fn set_session_value(&self, key: &str, value: &str) -> Result<(), StoreError> {
-        if self.connections().count() == 0 {
+        if self.config_connections().count() == 0 {
             return Err(StoreError::NoBackend);
         }
-        for conn in self.connections() {
+        for conn in self.config_connections() {
             conn.execute(
                 "INSERT INTO session_state(key, value) VALUES (?, ?)
                  ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -423,7 +590,7 @@ impl DuckDbStore {
     }
 
     pub fn get_session_value(&self, key: &str) -> Result<Option<String>, StoreError> {
-        for conn in self.connections() {
+        for conn in self.config_connections() {
             let mut stmt = conn.prepare("SELECT value FROM session_state WHERE key = ? LIMIT 1")?;
             let mut rows = stmt.query([key])?;
             if let Some(row) = rows.next()? {
@@ -435,10 +602,10 @@ impl DuckDbStore {
     }
 
     pub fn set_watchlist(&self, symbols: &[String]) -> Result<(), StoreError> {
-        if self.connections().count() == 0 {
+        if self.config_connections().count() == 0 {
             return Err(StoreError::NoBackend);
         }
-        for conn in self.connections() {
+        for conn in self.config_connections() {
             let tx = conn.unchecked_transaction()?;
             tx.execute("DELETE FROM watchlist", [])?;
             for sym in symbols {
@@ -451,7 +618,7 @@ impl DuckDbStore {
 
     pub fn get_watchlist(&self) -> Result<Vec<String>, StoreError> {
         let mut out = Vec::new();
-        for conn in self.connections() {
+        for conn in self.config_connections() {
             let mut stmt = conn.prepare("SELECT symbol FROM watchlist ORDER BY symbol ASC")?;
             let mut rows = stmt.query([])?;
             while let Some(row) = rows.next()? {
@@ -512,7 +679,22 @@ impl DuckDbStore {
     }
 }
 
-fn init_schema(conn: &Connection) -> Result<(), StoreError> {
+fn init_config_schema(conn: &Connection) -> Result<(), StoreError> {
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS session_state (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS watchlist (
+            symbol TEXT PRIMARY KEY
+        );
+        ",
+    )?;
+    Ok(())
+}
+
+fn init_data_schema(conn: &Connection) -> Result<(), StoreError> {
     conn.execute_batch(
         "
         CREATE TABLE IF NOT EXISTS candles (
@@ -534,15 +716,30 @@ fn init_schema(conn: &Connection) -> Result<(), StoreError> {
         );
         CREATE INDEX IF NOT EXISTS idx_indicator_symbol_ts ON indicator_values(symbol, indicator, timestamp);
 
-        CREATE TABLE IF NOT EXISTS session_state (
-            key TEXT PRIMARY KEY,
-            value TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS watchlist (
-            symbol TEXT PRIMARY KEY
+        CREATE TABLE IF NOT EXISTS universe (
+            filters TEXT NOT NULL,
+            badge TEXT NOT NULL,
+            symbol TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            market TEXT NOT NULL,
+            venue TEXT NOT NULL
         );
         ",
     )?;
+    Ok(())
+}
+
+fn attach_and_copy(
+    conn: &Connection,
+    legacy_path: &Path,
+    statements: &[&str],
+) -> Result<(), StoreError> {
+    let legacy_path = legacy_path.to_string_lossy().replace('\'', "''");
+    conn.execute_batch(&format!("ATTACH '{legacy_path}' AS legacy;"))?;
+    for statement in statements {
+        let _ = conn.execute_batch(statement);
+    }
+    conn.execute_batch("DETACH legacy;")?;
     Ok(())
 }
 

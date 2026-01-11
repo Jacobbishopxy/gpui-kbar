@@ -15,7 +15,7 @@ use time::macros::format_description;
 use super::super::ChartMeta;
 use crate::data::{
     symbols::{SymbolMeta, load_symbols},
-    universe::{SymbolSearchEntry, load_universe},
+    universe::{SymbolSearchEntry, load_universe, load_universe_from_store},
 };
 use crate::live::{
     DEFAULT_BACKFILL_LIMIT, LiveConfig, LiveEvent, backfill_candles, cursor_key_for,
@@ -1615,6 +1615,14 @@ impl ChartView {
         if !self.universe.is_empty() {
             return;
         }
+        if let Some(store) = &self.store
+            && let Ok(guard) = store.lock()
+            && let Ok(entries) = load_universe_from_store(&guard)
+        {
+            self.universe = entries;
+            return;
+        }
+
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../data/universe.csv");
         if let Ok(entries) = load_universe(path.to_str().unwrap_or_default()) {
             self.universe = entries;

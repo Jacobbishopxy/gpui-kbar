@@ -10,9 +10,20 @@ mod restart_manager_link {
 }
 
 fn main() -> anyhow::Result<()> {
-    let path = Path::new("data/cache.duckdb");
+    let config_path = Path::new("data/config.duckdb");
+    let legacy_path = Path::new("data/cache.duckdb");
+    let path = if config_path.exists() {
+        config_path
+    } else {
+        legacy_path
+    };
     if !path.exists() {
-        eprintln!("cache file not found at {}", path.display());
+        eprintln!(
+            "cache file not found at {} (expected config at {}, legacy at {})",
+            path.display(),
+            config_path.display(),
+            legacy_path.display()
+        );
         return Ok(());
     }
 

@@ -32,7 +32,7 @@ Status
 - [x] DuckDB-backed cache persists streamed data and hydrates on startup.
 - [x] Unified loader merges cache + live stream and feeds the UI/resampler.
 - [x] Watchlist panel UI polish (scroll, sizing, overflow, close icon).
-- [x] Local symbol search now hydrates from `data/universe.csv` + `mapping.csv`, with per-symbol candle generation via `scripts/generate_kbar.py`.
+- [x] Symbol universe loads from DuckDB first (imported from `data/universe.csv` into `data/data.duckdb`) with CSV fallback.
 
 Moved to Milestone 11
 
