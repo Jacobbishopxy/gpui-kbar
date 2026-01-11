@@ -13,4 +13,4 @@ Next steps
 
 - [x] Add resampling/bounds helpers in core for chart scaling.
 - [x] Expose public API surface for UI/app to request column mapping and load options.
-- [ ] Wire app/ui to call loaders and surface errors to the gpui layer.
+- [x] Wire app/ui to call loaders and surface errors to the gpui layer.

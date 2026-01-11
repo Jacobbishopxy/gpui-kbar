@@ -11,3 +11,9 @@ anyhow = { workspace = true }
 time = { workspace = true }
 ui = { path = "../ui" }
 kbar_core = { package = "core", path = "../core" }
+clap = { workspace = true }
+flux-schema = { workspace = true }
+flatbuffers = { workspace = true }
+tokio = { workspace = true }
+zeromq = { workspace = true }
+csv = "1.3"

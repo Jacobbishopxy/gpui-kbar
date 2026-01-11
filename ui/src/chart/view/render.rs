@@ -46,6 +46,7 @@ const SKIP_CHART_RENDER_WHILE_LOADING: bool = true;
 pub(crate) struct RenderState {
     pub(crate) interval_label: SharedString,
     pub(crate) playback_label: SharedString,
+    pub(crate) playback_dot_hex: u32,
     pub(crate) timezone_label: SharedString,
     pub(crate) candles: Arc<[Candle]>,
     pub(crate) visible_start: usize,
@@ -75,9 +76,12 @@ impl RenderState {
         let interval_label = ChartView::interval_label(view.current_interval());
         let playback_label = SharedString::from(if view.replay_enabled() {
             "Replay"
-        } else {
+        } else if view.live_mode {
             "Live"
+        } else {
+            "Static"
         });
+        let playback_dot_hex = view.live_dot_hex();
         let timezone_label = SharedString::from(
             view.candles
                 .last()
@@ -187,6 +191,7 @@ impl RenderState {
         Self {
             interval_label,
             playback_label,
+            playback_dot_hex,
             timezone_label,
             candles,
             visible_start: start,
@@ -467,8 +472,8 @@ fn build_footer_bar(view: &mut ChartView, cx: &mut Context<ChartView>, state: &R
         state.interval_label.clone(),
         state.candle_count,
         state.range_text.clone(),
-        !view.replay_enabled(),
         state.playback_label.clone(),
+        state.playback_dot_hex,
         state.timezone_label.clone(),
     )
 }

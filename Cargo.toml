@@ -11,8 +11,16 @@ repository = "https://github.com/Jacobbishopxy/gpui-kbar"
 [workspace.dependencies]
 gpui = { version = "0" }
 gpui-component = { version = "0.5" }
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "sync"] }
-zeromq = { git = "https://github.com/zeromq/zmq.rs", rev = "4006664971ece1b7c44f20ef8b2d0ae97eca18d4", default-features = false, features = ["tokio-runtime", "tcp-transport"] }
+tokio = { version = "1", features = [
+    "macros",
+    "rt-multi-thread",
+    "time",
+    "sync",
+] }
+zeromq = { version = "0.4.1", default-features = false, features = [
+    "tokio-runtime",
+    "tcp-transport",
+] }
 flatbuffers = "25"
 polars = { version = "0.52", features = [
     "lazy",
@@ -26,4 +34,4 @@ anyhow = "1"
 thiserror = "2"
 clap = { version = "4.5", features = ["derive"] }
 duckdb = { version = "1.4.3", features = ["bundled"] }
-flux-schema = { git = "ssh://git@github.com/Jacobbishopxy/flux.git", rev = "307ed60e27379cb9bb48b76ff64134237c390000" }
+flux-schema = { git = "https://github.com/Jacobbishopxy/flux.git", branch = "master" }

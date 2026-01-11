@@ -271,10 +271,7 @@ pub fn settings_overlay(view: &mut ChartView, cx: &mut Context<ChartView>) -> Op
                     0x111827,
                 )),
         )
-        .child(section(
-            "Data",
-            data_section,
-        ))
+        .child(section("Data", data_section))
         .child(section(
             "Chart",
             div().flex().flex_col().gap_3().child(replay_row),

@@ -27,10 +27,19 @@ Plan
 
 Status
 
-- [ ] FlatBuffers schema defined and codegen integrated into the build.
-- [ ] ZMQ subscriber service wired into the app/core data path with reconnect/heartbeat.
-- [ ] DuckDB-backed cache persists streamed data and hydrates on startup.
-- [ ] Unified loader merges cache + live stream and feeds the UI/resampler.
-- [ ] Harness/demo publishes FlatBuffers over ZMQ and verifies DuckDB round-trip.
-- [ ] Watchlist panel UI polish (scroll, sizing, overflow, close icon).
+- [x] FlatBuffers schema defined and codegen integrated into the build (via `flux-schema`).
+- [x] ZMQ subscriber service wired into the app/core data path with reconnect/backoff.
+- [x] DuckDB-backed cache persists streamed data and hydrates on startup.
+- [x] Unified loader merges cache + live stream and feeds the UI/resampler.
+- [x] Watchlist panel UI polish (scroll, sizing, overflow, close icon).
 - [x] Local symbol search now hydrates from `data/universe.csv` + `mapping.csv`, with per-symbol candle generation via `scripts/generate_kbar.py`.
+
+Moved to Milestone 11
+
+- Remaining Milestone 7 follow-ups live at `plans/candlestick-gpui/milestone-11.md`.
+
+Backend notes (Flux)
+
+- Backend repo: `../flux` (see `../flux/docs/plan.md` and `plans/runtime-plugins-live-data/live-data-bridge.md` for the contract).
+- Wire schema source of truth: `../flux/crates/flux-schema/schemas/market_data.fbs`.
+- Expected sockets (defaults used by the app): `tcp://127.0.0.1:5556` (PUB) and `tcp://127.0.0.1:5557` (REQ/REP).

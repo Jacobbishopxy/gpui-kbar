@@ -1,8 +1,9 @@
 use std::sync::OnceLock;
 
 use core::Candle;
-use flux_schema::{fb, WIRE_SCHEMA_VERSION};
+use flux_schema::{WIRE_SCHEMA_VERSION, fb};
 use time::OffsetDateTime;
+use tokio::time::sleep;
 use zeromq::{Socket, SocketRecv, SocketSend};
 
 pub const DEFAULT_LIVE_PUB: &str = "tcp://127.0.0.1:5556";
@@ -83,18 +84,47 @@ pub async fn subscribe_candles(
     sender: tokio::sync::mpsc::UnboundedSender<LiveEvent>,
 ) -> Result<(), String> {
     let topic = topic_for(&cfg, &symbol);
+    let mut backoff_ms = 200u64;
+    loop {
+        match subscribe_candles_once(&cfg, &topic, &sender).await {
+            Ok(()) => return Ok(()),
+            Err(err) => {
+                let _ = sender.send(LiveEvent::Error(err));
+                sleep(std::time::Duration::from_millis(backoff_ms)).await;
+                backoff_ms = (backoff_ms.saturating_mul(2)).min(5_000);
+            }
+        }
+    }
+}
+
+pub fn topic_for(cfg: &LiveConfig, symbol: &str) -> String {
+    format!("candles.{}.{}.{}", cfg.source_id, symbol, cfg.interval)
+}
+
+pub fn cursor_key_for(cfg: &LiveConfig, symbol: &str) -> String {
+    format!("live_cursor.{}.{}.{}", cfg.source_id, symbol, cfg.interval)
+}
+
+async fn subscribe_candles_once(
+    cfg: &LiveConfig,
+    topic: &str,
+    sender: &tokio::sync::mpsc::UnboundedSender<LiveEvent>,
+) -> Result<(), String> {
     let mut socket = zeromq::SubSocket::new();
     socket
         .connect(&cfg.live_pub)
         .await
         .map_err(|e| format!("live_pub connect failed: {e}"))?;
     socket
-        .subscribe(&topic)
+        .subscribe(topic)
         .await
         .map_err(|e| format!("subscribe failed: {e}"))?;
 
     loop {
-        let msg = socket.recv().await.map_err(|e| format!("sub recv failed: {e}"))?;
+        let msg = socket
+            .recv()
+            .await
+            .map_err(|e| format!("sub recv failed: {e}"))?;
         if msg.len() < 2 {
             continue;
         }
@@ -111,10 +141,6 @@ pub async fn subscribe_candles(
             }
         }
     }
-}
-
-pub fn topic_for(cfg: &LiveConfig, symbol: &str) -> String {
-    format!("candles.{}.{}.{}", cfg.source_id, symbol, cfg.interval)
 }
 
 fn encode_backfill_request(
@@ -229,3 +255,287 @@ fn build_stream_key<'a>(
     )
 }
 
+#[cfg(test)]
+mod tests {
+    use std::net::TcpListener;
+    use std::path::PathBuf;
+
+    use core::{DuckDbStore, StorageMode};
+    use time::macros::datetime;
+    use tokio::sync::oneshot;
+    use tokio::time::timeout;
+    use zeromq::{Socket, SocketRecv, SocketSend};
+
+    use super::*;
+
+    fn pick_unused_tcp_port() -> u16 {
+        TcpListener::bind("127.0.0.1:0")
+            .expect("bind ephemeral port")
+            .local_addr()
+            .expect("local addr")
+            .port()
+    }
+
+    fn temp_duckdb_path() -> PathBuf {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("time")
+            .as_nanos();
+        std::env::temp_dir().join(format!("gpui-kbar-live-roundtrip-{nonce}.duckdb"))
+    }
+
+    fn encode_candle_batch(
+        cfg: &LiveConfig,
+        symbol: &str,
+        start_sequence: u64,
+        candles: &[Candle],
+    ) -> Vec<u8> {
+        let mut fbb = flatbuffers::FlatBufferBuilder::new();
+        let key = super::build_stream_key(&mut fbb, cfg, symbol);
+
+        let mut candle_offsets = Vec::with_capacity(candles.len());
+        for candle in candles {
+            let ts_ms = candle.timestamp.unix_timestamp_nanos() / 1_000_000;
+            candle_offsets.push(fb::Candle::create(
+                &mut fbb,
+                &fb::CandleArgs {
+                    ts_ms: ts_ms as i64,
+                    open: candle.open,
+                    high: candle.high,
+                    low: candle.low,
+                    close: candle.close,
+                    volume: candle.volume,
+                },
+            ));
+        }
+        let candle_vec = fbb.create_vector(&candle_offsets);
+        let batch = fb::CandleBatch::create(
+            &mut fbb,
+            &fb::CandleBatchArgs {
+                key: Some(key),
+                start_sequence,
+                candles: Some(candle_vec),
+            },
+        );
+
+        let env = fb::Envelope::create(
+            &mut fbb,
+            &fb::EnvelopeArgs {
+                schema_version: WIRE_SCHEMA_VERSION,
+                type_hint: fb::MessageType::CANDLE_BATCH,
+                correlation_id: None,
+                message_type: fb::Message::CandleBatch,
+                message: Some(batch.as_union_value()),
+            },
+        );
+        fb::finish_envelope_buffer(&mut fbb, env);
+        fbb.finished_data().to_vec()
+    }
+
+    fn encode_backfill_response(
+        cfg: &LiveConfig,
+        symbol: &str,
+        start_sequence: u64,
+        candles: &[Candle],
+    ) -> Vec<u8> {
+        let mut fbb = flatbuffers::FlatBufferBuilder::new();
+        let key = super::build_stream_key(&mut fbb, cfg, symbol);
+
+        let mut candle_offsets = Vec::with_capacity(candles.len());
+        for candle in candles {
+            let ts_ms = candle.timestamp.unix_timestamp_nanos() / 1_000_000;
+            candle_offsets.push(fb::Candle::create(
+                &mut fbb,
+                &fb::CandleArgs {
+                    ts_ms: ts_ms as i64,
+                    open: candle.open,
+                    high: candle.high,
+                    low: candle.low,
+                    close: candle.close,
+                    volume: candle.volume,
+                },
+            ));
+        }
+        let candle_vec = fbb.create_vector(&candle_offsets);
+        let resp = fb::BackfillCandlesResponse::create(
+            &mut fbb,
+            &fb::BackfillCandlesResponseArgs {
+                key: Some(key),
+                start_sequence,
+                candles: Some(candle_vec),
+                has_more: false,
+                next_sequence: 0,
+            },
+        );
+
+        let env = fb::Envelope::create(
+            &mut fbb,
+            &fb::EnvelopeArgs {
+                schema_version: WIRE_SCHEMA_VERSION,
+                type_hint: fb::MessageType::BACKFILL_CANDLES_RESPONSE,
+                correlation_id: None,
+                message_type: fb::Message::BackfillCandlesResponse,
+                message: Some(resp.as_union_value()),
+            },
+        );
+        fb::finish_envelope_buffer(&mut fbb, env);
+        fbb.finished_data().to_vec()
+    }
+
+    #[test]
+    fn live_roundtrip_persists_and_restores_candles() {
+        tokio_runtime().block_on(async {
+            let live_port = pick_unused_tcp_port();
+            let rep_port = pick_unused_tcp_port();
+
+            let cfg = LiveConfig {
+                live_pub: format!("tcp://127.0.0.1:{live_port}"),
+                chunk_rep: format!("tcp://127.0.0.1:{rep_port}"),
+                source_id: "SIM".to_string(),
+                interval: "1s".to_string(),
+            };
+            let symbol = "TEST";
+
+            let candles = vec![
+                Candle {
+                    timestamp: datetime!(2026-01-01 00:00:00 UTC),
+                    open: 1.0,
+                    high: 2.0,
+                    low: 0.5,
+                    close: 1.5,
+                    volume: 10.0,
+                },
+                Candle {
+                    timestamp: datetime!(2026-01-01 00:00:01 UTC),
+                    open: 1.5,
+                    high: 2.5,
+                    low: 1.0,
+                    close: 2.0,
+                    volume: 11.0,
+                },
+                Candle {
+                    timestamp: datetime!(2026-01-01 00:00:02 UTC),
+                    open: 2.0,
+                    high: 3.0,
+                    low: 1.5,
+                    close: 2.5,
+                    volume: 12.0,
+                },
+                Candle {
+                    timestamp: datetime!(2026-01-01 00:00:03 UTC),
+                    open: 2.5,
+                    high: 3.5,
+                    low: 2.0,
+                    close: 3.0,
+                    volume: 13.0,
+                },
+                Candle {
+                    timestamp: datetime!(2026-01-01 00:00:04 UTC),
+                    open: 3.0,
+                    high: 4.0,
+                    low: 2.5,
+                    close: 3.5,
+                    volume: 14.0,
+                },
+            ];
+
+            let (publish_tx, publish_rx) = oneshot::channel::<()>();
+
+            let rep_addr = cfg.chunk_rep.clone();
+            let rep_candles = candles.clone();
+            let rep_cfg = cfg.clone();
+            let rep_task = tokio::spawn(async move {
+                let mut rep_socket = zeromq::RepSocket::new();
+                rep_socket.bind(&rep_addr).await.expect("rep bind");
+                loop {
+                    let req = rep_socket.recv().await.expect("rep recv");
+                    let req_bytes: Vec<u8> = req.try_into().expect("rep bytes");
+                    let env = fb::root_as_envelope(&req_bytes).expect("valid envelope");
+                    assert_eq!(env.schema_version(), WIRE_SCHEMA_VERSION);
+                    assert_eq!(env.message_type(), fb::Message::BackfillCandlesRequest);
+                    let req = env
+                        .message_as_backfill_candles_request()
+                        .expect("BackfillCandlesRequest body");
+                    let from_exclusive = if req.has_from_sequence() {
+                        req.from_sequence_exclusive()
+                    } else {
+                        0
+                    };
+                    let start_index = from_exclusive as usize;
+                    let limit = req.limit().max(1) as usize;
+                    let end_index = rep_candles.len().min(start_index.saturating_add(limit));
+                    let slice = &rep_candles[start_index..end_index];
+                    let resp = encode_backfill_response(
+                        &rep_cfg,
+                        symbol,
+                        from_exclusive.saturating_add(1),
+                        slice,
+                    );
+                    rep_socket.send(resp.into()).await.expect("rep send");
+                }
+            });
+
+            let pub_addr = cfg.live_pub.clone();
+            let pub_candles = candles.clone();
+            let pub_cfg = cfg.clone();
+            let pub_task = tokio::spawn(async move {
+                let mut pub_socket = zeromq::PubSocket::new();
+                pub_socket.bind(&pub_addr).await.expect("pub bind");
+                let _ = publish_rx.await;
+                let topic = topic_for(&pub_cfg, symbol);
+                let payload = encode_candle_batch(&pub_cfg, symbol, 4, &pub_candles[3..]);
+                let mut msg = zeromq::ZmqMessage::from(topic.as_str());
+                msg.push_back(payload.into());
+                pub_socket.send(msg).await.expect("pub send");
+            });
+
+            let path = temp_duckdb_path();
+            let store = DuckDbStore::new(&path, StorageMode::Disk).expect("store");
+
+            let (start, initial) = super::backfill_candles(&cfg, symbol, None, 3)
+                .await
+                .expect("backfill");
+            assert_eq!(start, 1);
+            assert_eq!(initial.len(), 3);
+            store.write_candles(symbol, &initial).expect("write");
+            store
+                .set_session_value(&cursor_key_for(&cfg, symbol), "3")
+                .expect("cursor");
+
+            let topic = topic_for(&cfg, symbol);
+            let mut sub = zeromq::SubSocket::new();
+            sub.connect(&cfg.live_pub).await.expect("sub connect");
+            sub.subscribe(&topic).await.expect("sub subscribe");
+
+            let _ = publish_tx.send(());
+
+            let msg = timeout(std::time::Duration::from_secs(2), sub.recv())
+                .await
+                .expect("recv timeout")
+                .expect("recv ok");
+            assert!(msg.len() >= 2);
+            let payload = msg.get(1).unwrap().as_ref();
+            let (start_sequence, live) = super::decode_candle_batch(payload).expect("decode batch");
+            assert_eq!(start_sequence, 4);
+            assert_eq!(live.len(), 2);
+            store.append_candles(symbol, &live).expect("append");
+            store
+                .set_session_value(&cursor_key_for(&cfg, symbol), "5")
+                .expect("cursor update");
+
+            drop(store);
+            let reopened = DuckDbStore::new(&path, StorageMode::Disk).expect("reopen store");
+            let loaded = reopened.load_candles(symbol, None).expect("load");
+            assert_eq!(loaded.len(), 5);
+            assert_eq!(loaded.last().unwrap().close, 3.5);
+            let cursor = reopened
+                .get_session_value(&cursor_key_for(&cfg, symbol))
+                .expect("cursor read")
+                .expect("cursor exists");
+            assert_eq!(cursor, "5");
+
+            rep_task.abort();
+            pub_task.abort();
+        });
+    }
+}

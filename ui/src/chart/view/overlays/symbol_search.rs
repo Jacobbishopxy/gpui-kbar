@@ -86,6 +86,7 @@ pub fn symbol_search_overlay(view: &mut ChartView, cx: &mut Context<ChartView>) 
         let row_bg_hex = if active { 0x0f172a } else { 0x0b1220 };
         let border_color = if active { rgb(0x2563eb) } else { rgb(0x1f2937) };
         let symbol = entry.symbol.clone();
+        let selector_symbol = symbol.clone();
         let row_id: gpui::SharedString = format!("symbol-search-row-{symbol}").into();
         let is_loading = loading_symbol.as_deref() == Some(&symbol);
         let on_select = cx.listener(
@@ -175,7 +176,8 @@ pub fn symbol_search_overlay(view: &mut ChartView, cx: &mut Context<ChartView>) 
                                 .child(entry.venue.clone()),
                         ),
                 )
-                .id(row_id),
+                .id(row_id)
+                .debug_selector(move || format!("symbol-search-row-{selector_symbol}")),
             row_bg_hex,
         );
 

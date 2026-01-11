@@ -197,6 +197,63 @@ impl DuckDbStore {
         Ok(())
     }
 
+    /// Appends candle rows for `symbol` without clearing the full symbol history.
+    ///
+    /// Existing rows in the appended time span are deleted first to avoid duplicate timestamps.
+    pub fn append_candles(&self, symbol: &str, candles: &[Candle]) -> Result<(), StoreError> {
+        if self.connections().count() == 0 {
+            return Err(StoreError::NoBackend);
+        }
+        if candles.is_empty() {
+            return Ok(());
+        }
+
+        let deduped = dedup_by_timestamp(candles);
+        let (min_ts, max_ts) = deduped.iter().fold(
+            (deduped[0].timestamp, deduped[0].timestamp),
+            |(min_ts, max_ts), candle| (min_ts.min(candle.timestamp), max_ts.max(candle.timestamp)),
+        );
+        let min_ts = min_ts.format(&Rfc3339)?;
+        let max_ts = max_ts.format(&Rfc3339)?;
+
+        for conn in self.connections() {
+            conn.execute_batch("BEGIN TRANSACTION")?;
+            let result: Result<(), StoreError> = (|| {
+                conn.execute(
+                    "DELETE FROM candles WHERE symbol = ? AND timestamp >= ? AND timestamp <= ?",
+                    params![symbol, min_ts, max_ts],
+                )?;
+
+                let mut app = conn.appender("candles")?;
+                for candle in &deduped {
+                    let ts = candle.timestamp.format(&Rfc3339)?;
+                    app.append_row(params![
+                        symbol,
+                        ts,
+                        candle.open,
+                        candle.high,
+                        candle.low,
+                        candle.close,
+                        candle.volume
+                    ])?;
+                }
+                app.flush()?;
+
+                Ok(())
+            })();
+
+            match result {
+                Ok(()) => conn.execute_batch("COMMIT")?,
+                Err(err) => {
+                    let _ = conn.execute_batch("ROLLBACK");
+                    return Err(err);
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     pub fn load_candles(
         &self,
         symbol: &str,
@@ -543,6 +600,26 @@ mod tests {
                 volume: 12.0,
             },
         ]
+    }
+
+    #[test]
+    fn append_candles_keeps_existing_history() {
+        let store = DuckDbStore::new(temp_path(), StorageMode::Memory).unwrap();
+        store.write_candles("SYM", &sample_candles()).unwrap();
+
+        let appended = vec![Candle {
+            timestamp: datetime!(2024-01-01 00:03:00 UTC),
+            open: 2.5,
+            high: 3.5,
+            low: 2.0,
+            close: 3.0,
+            volume: 20.0,
+        }];
+        store.append_candles("SYM", &appended).unwrap();
+
+        let loaded = store.load_candles("SYM", None).unwrap();
+        assert_eq!(loaded.len(), 4);
+        assert_eq!(loaded.last().unwrap().close, 3.0);
     }
 
     #[test]

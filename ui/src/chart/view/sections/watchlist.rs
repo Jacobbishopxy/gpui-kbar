@@ -331,4 +331,37 @@ mod tests {
         let watchlist = chart.update(cx, |chart, _| chart.watchlist.clone());
         assert_eq!(watchlist, vec!["MSFT".to_string(), "TSLA".to_string()]);
     }
+
+    #[gpui::test]
+    async fn watchlist_add_adds_symbol_even_if_already_loaded(cx: &TestAppContext) {
+        let mut cx = cx.clone();
+        let (chart, cx) = cx.add_window_view(|_, cx| {
+            ChartView::new(
+                Vec::<Candle>::new(),
+                ChartMeta {
+                    source: "US02Y".to_string(),
+                    initial_interval: None,
+                },
+                None,
+                cx,
+            )
+        });
+
+        chart.update(cx, |chart, cx| {
+            chart.symbol_search_open = true;
+            chart.symbol_search_add_to_watchlist = true;
+            cx.notify();
+        });
+        cx.refresh().expect("refresh");
+        cx.run_until_parked();
+
+        let row_bounds = cx
+            .debug_bounds("symbol-search-row-US02Y")
+            .expect("symbol-search-row-US02Y bounds");
+        cx.simulate_click(row_bounds.center(), Modifiers::none());
+        cx.run_until_parked();
+
+        let watchlist = chart.update(cx, |chart, _| chart.watchlist.clone());
+        assert_eq!(watchlist, vec!["US02Y".to_string()]);
+    }
 }

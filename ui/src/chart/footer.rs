@@ -32,17 +32,23 @@ pub(super) fn chart_footer(
     interval_label: SharedString,
     candle_count: usize,
     range_text: SharedString,
-    live: bool,
     playback_label: SharedString,
+    playback_dot_hex: u32,
     timezone_label: SharedString,
 ) -> Div {
-    let playback_color = if live { rgb(0x22c55e) } else { rgb(0xf59e0b) };
-
     let playback = div()
         .flex()
         .items_center()
         .gap_2()
-        .child(div().w(px(8.)).h(px(8.)).rounded_full().bg(playback_color))
+        .child(
+            div()
+                .w(px(10.))
+                .h(px(10.))
+                .rounded_full()
+                .border_1()
+                .border_color(rgb(0x1f2937))
+                .bg(rgb(playback_dot_hex)),
+        )
         .child(
             div()
                 .flex()

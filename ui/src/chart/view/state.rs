@@ -2,6 +2,7 @@ use std::{
     collections::{HashMap, HashSet},
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
+    time::Instant,
 };
 
 use core::{Candle, Interval, LoadOptions, bounds, load_csv, resample};
@@ -17,8 +18,8 @@ use crate::data::{
     universe::{SymbolSearchEntry, load_universe},
 };
 use crate::live::{
-    DEFAULT_BACKFILL_LIMIT, LiveConfig, LiveEvent, backfill_candles, subscribe_candles,
-    tokio_runtime,
+    DEFAULT_BACKFILL_LIMIT, LiveConfig, LiveEvent, backfill_candles, cursor_key_for,
+    subscribe_candles, tokio_runtime,
 };
 use crate::perf::{PerfSpec, generate_perf_candles, parse_perf_source, perf_label};
 use core::DuckDbStore;
@@ -106,6 +107,18 @@ fn build_resamples(
     resamples
 }
 
+fn dedup_candles_by_timestamp(candles: Vec<Candle>) -> Vec<Candle> {
+    let mut seen = HashSet::new();
+    let mut unique = Vec::with_capacity(candles.len());
+    for candle in candles.iter().rev() {
+        if seen.insert(candle.timestamp) {
+            unique.push(candle.clone());
+        }
+    }
+    unique.reverse();
+    unique
+}
+
 fn normalize_resamples(
     base: &Arc<[Candle]>,
     resamples: Vec<(Option<Interval>, Arc<[Candle]>)>,
@@ -143,6 +156,8 @@ pub struct ChartView {
     live_generation: u64,
     live_last_sequence: u64,
     live_task: Option<tokio::task::JoinHandle<()>>,
+    pub(super) live_blink_on: bool,
+    live_last_event: Option<Instant>,
     pub(super) view_offset: f32,
     pub(super) zoom: f32,
     pub(super) root_origin: (f32, f32),
@@ -226,6 +241,8 @@ impl ChartView {
             live_generation: 0,
             live_last_sequence: 0,
             live_task: None,
+            live_blink_on: false,
+            live_last_event: None,
             view_offset: 0.0,
             zoom: 1.0,
             root_origin: (0.0, 0.0),
@@ -516,6 +533,8 @@ impl ChartView {
     fn stop_live_subscription(&mut self) {
         self.live_generation = self.live_generation.wrapping_add(1);
         self.live_last_sequence = 0;
+        self.live_blink_on = false;
+        self.live_last_event = None;
         if let Some(task) = self.live_task.take() {
             task.abort();
         }
@@ -634,9 +653,18 @@ impl ChartView {
                 let resample_intervals = collect_resample_intervals(interval_at_start);
                 self.ensure_symbol_catalog();
                 if self.loading_symbol.as_deref() == Some(symbol) {
+                    if *add_to_watchlist {
+                        self.add_to_watchlist(symbol.clone());
+                        cx.notify();
+                        window.refresh();
+                    }
                     return;
                 }
                 if self.source == *symbol && !force_reload {
+                    if *add_to_watchlist {
+                        self.add_to_watchlist(symbol.clone());
+                        cx.notify();
+                    }
                     self.symbol_search_open = false;
                     window.refresh();
                     return;
@@ -646,6 +674,7 @@ impl ChartView {
                     self.stop_live_subscription();
 
                     let cfg = self.live_config.clone();
+                    let store = self.store.clone();
                     let load_id = self.active_load_seq.wrapping_add(1);
                     self.active_load_seq = load_id;
                     self.loading_symbol = Some(symbol.clone());
@@ -660,12 +689,39 @@ impl ChartView {
 
                     window
                         .spawn(cx, async move |async_cx| {
+                            let symbol_for_cache = symbol_for_task.clone();
+                            let store_for_cache = store.clone();
+                            let cfg_for_cache = cfg.clone();
+                            let bg = async_cx.background_executor().clone();
+                            let cache_task = bg.spawn(async move {
+                                let Some(store) = store_for_cache else {
+                                    return (Vec::new(), None);
+                                };
+                                let Ok(guard) = store.lock() else {
+                                    return (Vec::new(), None);
+                                };
+                                let cached = guard
+                                    .load_candles(&symbol_for_cache, None)
+                                    .ok()
+                                    .unwrap_or_default();
+                                let cursor_key = cursor_key_for(&cfg_for_cache, &symbol_for_cache);
+                                let last_sequence = guard
+                                    .get_session_value(&cursor_key)
+                                    .ok()
+                                    .flatten()
+                                    .and_then(|v| v.parse::<u64>().ok());
+                                (cached, last_sequence)
+                            });
+
+                            let (cached, last_sequence) = cache_task.await;
+
+                            let cfg_for_backfill = cfg.clone();
                             let symbol_for_backfill = symbol_for_task.clone();
                             let handle = tokio_runtime().spawn(async move {
                                 backfill_candles(
-                                    &cfg,
+                                    &cfg_for_backfill,
                                     &symbol_for_backfill,
-                                    None,
+                                    last_sequence,
                                     DEFAULT_BACKFILL_LIMIT,
                                 )
                                 .await
@@ -673,18 +729,50 @@ impl ChartView {
 
                             let result = match handle.await {
                                 Ok(Ok((start_sequence, candles))) => {
-                                    let base_arc: Arc<[Candle]> = Arc::from(candles);
+                                    let received_len = candles.len();
+                                    let mut merged = cached;
+                                    merged.extend(candles);
+                                    let merged = dedup_candles_by_timestamp(merged);
+                                    let base_arc: Arc<[Candle]> = Arc::from(merged);
                                     let resamples = build_resamples(&base_arc, &resample_intervals);
-                                    let last_sequence = base_arc
-                                        .len()
-                                        .checked_sub(1)
-                                        .map(|idx| start_sequence.saturating_add(idx as u64));
+                                    let live_last_sequence = if received_len == 0 {
+                                        last_sequence
+                                    } else {
+                                        Some(start_sequence.saturating_add(received_len as u64 - 1))
+                                    };
+                                    if let Some(store) = store.clone()
+                                        && !base_arc.is_empty()
+                                    {
+                                        let bg = async_cx.background_executor().clone();
+                                        let symbol_for_persist = symbol_for_task.clone();
+                                        let base_for_persist = base_arc.clone();
+                                        let cfg_for_persist = cfg.clone();
+                                        let cursor_value =
+                                            live_last_sequence.map(|v| v.to_string());
+                                        bg.spawn(async move {
+                                            if let Ok(guard) = store.lock() {
+                                                let _ = guard.write_candles(
+                                                    &symbol_for_persist,
+                                                    base_for_persist.as_ref(),
+                                                );
+                                                if let Some(cursor_value) = cursor_value {
+                                                    let key = cursor_key_for(
+                                                        &cfg_for_persist,
+                                                        &symbol_for_persist,
+                                                    );
+                                                    let _ = guard
+                                                        .set_session_value(&key, &cursor_value);
+                                                }
+                                            }
+                                        })
+                                        .detach();
+                                    }
                                     Ok(LoadResult {
                                         symbol: symbol_for_task.clone(),
                                         base: base_arc,
                                         resamples,
                                         needs_persist: false,
-                                        live_last_sequence: last_sequence,
+                                        live_last_sequence,
                                     })
                                 }
                                 Ok(Err(err)) => Err(err),
@@ -947,7 +1035,7 @@ impl ChartView {
                                 if !this.live_mode || this.live_generation != load_id {
                                     return;
                                 }
-                                this.apply_live_event(event);
+                                this.apply_live_event(event, cx);
                                 cx.notify();
                             });
                             window.refresh();
@@ -958,25 +1046,51 @@ impl ChartView {
             .detach();
     }
 
-    fn apply_live_event(&mut self, event: LiveEvent) {
+    fn apply_live_event(&mut self, event: LiveEvent, cx: &mut Context<Self>) {
         match event {
             LiveEvent::CandleBatch {
                 start_sequence,
                 candles,
-            } => self.append_live_batch(start_sequence, candles),
+            } => {
+                self.live_blink_on = !self.live_blink_on;
+                self.live_last_event = Some(Instant::now());
+                self.append_live_batch(start_sequence, candles, cx)
+            }
             LiveEvent::Error(err) => {
                 self.load_error = Some(err);
             }
         }
     }
 
-    fn append_live_batch(&mut self, start_sequence: u64, mut candles: Vec<Candle>) {
+    pub(super) fn live_dot_hex(&self) -> u32 {
+        if self.replay_enabled() {
+            return 0xf59e0b;
+        }
+        if !self.live_mode {
+            return 0x6b7280;
+        }
+        let is_recent = self
+            .live_last_event
+            .map(|t| t.elapsed() < std::time::Duration::from_secs(2))
+            .unwrap_or(false);
+        if is_recent && self.live_blink_on {
+            0x22c55e
+        } else {
+            0x16a34a
+        }
+    }
+
+    fn append_live_batch(
+        &mut self,
+        start_sequence: u64,
+        mut candles: Vec<Candle>,
+        cx: &mut Context<Self>,
+    ) {
         if candles.is_empty() {
             return;
         }
 
-        let last_seq = start_sequence
-            .saturating_add(candles.len().saturating_sub(1) as u64);
+        let last_seq = start_sequence.saturating_add(candles.len().saturating_sub(1) as u64);
         if last_seq <= self.live_last_sequence {
             return;
         }
@@ -987,6 +1101,22 @@ impl ChartView {
                 return;
             }
             candles.drain(0..skip);
+        }
+
+        if let Some(store) = self.store.clone() {
+            let bg = cx.background_executor().clone();
+            let symbol_for_store = self.source.clone();
+            let cfg_for_store = self.live_config.clone();
+            let cursor_key = cursor_key_for(&cfg_for_store, &symbol_for_store);
+            let cursor_value = last_seq.to_string();
+            let candles_for_store = candles.clone();
+            bg.spawn(async move {
+                if let Ok(guard) = store.lock() {
+                    let _ = guard.append_candles(&symbol_for_store, &candles_for_store);
+                    let _ = guard.set_session_value(&cursor_key, &cursor_value);
+                }
+            })
+            .detach();
         }
 
         let mut base: Vec<Candle> = self.base_candles.iter().cloned().collect();

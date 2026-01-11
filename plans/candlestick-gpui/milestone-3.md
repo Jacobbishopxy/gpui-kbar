@@ -16,4 +16,4 @@ Status
 Next steps
 
 - [x] Expose a public API surface (e.g., a module re-export) for UI/app to request column mapping/load options and resampling.
-- [ ] Wire loaders/resampling into UI/app, driving gpui chart state and controls.
+- [x] Wire loaders/resampling into UI/app, driving gpui chart state and controls.
