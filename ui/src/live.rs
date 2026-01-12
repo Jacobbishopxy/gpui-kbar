@@ -1,4 +1,5 @@
 use std::sync::OnceLock;
+use std::{collections::BTreeMap, future};
 
 use core::Candle;
 use flux_schema::{WIRE_SCHEMA_VERSION, fb};
@@ -31,13 +32,36 @@ impl Default for LiveConfig {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LiveStatus {
+    Disconnected,
+    Connecting,
+    Subscribed,
+    Backfilling,
+}
+
 #[derive(Debug, Clone)]
 pub enum LiveEvent {
+    Status(LiveStatus),
     CandleBatch {
         start_sequence: u64,
         candles: Vec<Candle>,
     },
     Error(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StreamCursor {
+    pub latest_sequence: u64,
+    pub latest_ts_ms: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct BackfillChunk {
+    pub start_sequence: u64,
+    pub candles: Vec<Candle>,
+    pub has_more: bool,
+    pub next_sequence: Option<u64>,
 }
 
 pub fn tokio_runtime() -> &'static tokio::runtime::Runtime {
@@ -50,19 +74,36 @@ pub fn tokio_runtime() -> &'static tokio::runtime::Runtime {
     })
 }
 
+pub fn parse_interval_ms(interval: &str) -> Option<i64> {
+    if interval.len() < 2 {
+        return None;
+    }
+    let (num, unit) = interval.split_at(interval.len() - 1);
+    let n: i64 = num.parse().ok()?;
+    let unit_ms = match unit {
+        "s" => 1_000,
+        "m" => 60_000,
+        "h" => 3_600_000,
+        "d" => 86_400_000,
+        _ => return None,
+    };
+    n.checked_mul(unit_ms)
+}
+
 pub async fn backfill_candles(
     cfg: &LiveConfig,
     symbol: &str,
     from_sequence_exclusive: Option<u64>,
     limit: u32,
-) -> Result<(u64, Vec<Candle>), String> {
+    end_ts_ms: Option<i64>,
+) -> Result<BackfillChunk, String> {
     let mut socket = zeromq::ReqSocket::new();
     socket
         .connect(&cfg.chunk_rep)
         .await
         .map_err(|e| format!("chunk_rep connect failed: {e}"))?;
 
-    let req = encode_backfill_request(cfg, symbol, from_sequence_exclusive, limit);
+    let req = encode_backfill_request(cfg, symbol, from_sequence_exclusive, limit, end_ts_ms);
     socket
         .send(req.into())
         .await
@@ -78,6 +119,30 @@ pub async fn backfill_candles(
     decode_backfill_response(&bytes)
 }
 
+pub async fn get_cursor(cfg: &LiveConfig, symbol: &str) -> Result<StreamCursor, String> {
+    let mut socket = zeromq::ReqSocket::new();
+    socket
+        .connect(&cfg.chunk_rep)
+        .await
+        .map_err(|e| format!("chunk_rep connect failed: {e}"))?;
+
+    let req = encode_get_cursor_request(cfg, symbol);
+    socket
+        .send(req.into())
+        .await
+        .map_err(|e| format!("chunk_rep send failed: {e}"))?;
+
+    let repl = socket
+        .recv()
+        .await
+        .map_err(|e| format!("chunk_rep recv failed: {e}"))?;
+    let bytes: Vec<u8> = repl
+        .try_into()
+        .map_err(|e| format!("chunk_rep response invalid: {e}"))?;
+    decode_get_cursor_response(&bytes)
+}
+
+#[allow(dead_code)]
 pub async fn subscribe_candles(
     cfg: LiveConfig,
     symbol: String,
@@ -86,14 +151,313 @@ pub async fn subscribe_candles(
     let topic = topic_for(&cfg, &symbol);
     let mut backoff_ms = 200u64;
     loop {
+        let _ = sender.send(LiveEvent::Status(LiveStatus::Connecting));
         match subscribe_candles_once(&cfg, &topic, &sender).await {
             Ok(()) => return Ok(()),
             Err(err) => {
                 let _ = sender.send(LiveEvent::Error(err));
+                let _ = sender.send(LiveEvent::Status(LiveStatus::Disconnected));
                 sleep(std::time::Duration::from_millis(backoff_ms)).await;
                 backoff_ms = (backoff_ms.saturating_mul(2)).min(5_000);
             }
         }
+    }
+}
+
+pub async fn run_live_coordinator(
+    cfg: LiveConfig,
+    symbol: String,
+    last_applied_sequence: u64,
+    sender: tokio::sync::mpsc::UnboundedSender<LiveEvent>,
+) -> Result<(), String> {
+    let topic = topic_for(&cfg, &symbol);
+    let interval_ms = parse_interval_ms(&cfg.interval).unwrap_or(1_000).max(1);
+    let mut expected_next_sequence = last_applied_sequence.saturating_add(1).max(1);
+
+    let mut backoff_ms = 200u64;
+    loop {
+        let _ = sender.send(LiveEvent::Status(LiveStatus::Connecting));
+
+        let mut socket = zeromq::SubSocket::new();
+        if let Err(err) = socket.connect(&cfg.live_pub).await {
+            let _ = sender.send(LiveEvent::Error(format!("live_pub connect failed: {err}")));
+            let _ = sender.send(LiveEvent::Status(LiveStatus::Disconnected));
+            sleep(std::time::Duration::from_millis(backoff_ms)).await;
+            backoff_ms = (backoff_ms.saturating_mul(2)).min(5_000);
+            continue;
+        }
+        if let Err(err) = socket.subscribe(&topic).await {
+            let _ = sender.send(LiveEvent::Error(format!("subscribe failed: {err}")));
+            let _ = sender.send(LiveEvent::Status(LiveStatus::Disconnected));
+            sleep(std::time::Duration::from_millis(backoff_ms)).await;
+            backoff_ms = (backoff_ms.saturating_mul(2)).min(5_000);
+            continue;
+        }
+        let _ = sender.send(LiveEvent::Status(LiveStatus::Subscribed));
+        backoff_ms = 200;
+
+        let mut buffered: BTreeMap<u64, Vec<Candle>> = BTreeMap::new();
+        let mut backfill_inflight: Option<
+            tokio::sync::oneshot::Receiver<Result<BackfillChunk, String>>,
+        > = None;
+
+        loop {
+            tokio::select! {
+                msg = socket.recv() => {
+                    let msg: zeromq::ZmqMessage = match msg {
+                        Ok(msg) => msg,
+                        Err(err) => {
+                            let _ = sender.send(LiveEvent::Error(format!("sub recv failed: {err}")));
+                            let _ = sender.send(LiveEvent::Status(LiveStatus::Disconnected));
+                            break;
+                        }
+                    };
+                    if msg.len() < 2 {
+                        continue;
+                    }
+                    let payload: &[u8] = match msg.get(1) {
+                        Some(frame) => frame.as_ref(),
+                        None => &[],
+                    };
+                    let (start_sequence, candles) = match decode_candle_batch(payload) {
+                        Ok(v) => v,
+                        Err(err) => {
+                            let _ = sender.send(LiveEvent::Error(err));
+                            continue;
+                        }
+                    };
+
+                    if candles.is_empty() {
+                        continue;
+                    }
+
+                    if start_sequence > expected_next_sequence {
+                        buffered.insert(start_sequence, candles);
+                        if backfill_inflight.is_none() {
+                            let from_exclusive = expected_next_sequence.saturating_sub(1);
+                            let (end_ts_ms, missing_limit) = gap_backfill_bounds(
+                                &cfg,
+                                interval_ms,
+                                expected_next_sequence,
+                                start_sequence,
+                                buffered.get(&start_sequence),
+                            );
+                            let cfg_for_task = cfg.clone();
+                            let symbol_for_task = symbol.clone();
+                            let _ = sender.send(LiveEvent::Status(LiveStatus::Backfilling));
+                            let (tx, rx) = tokio::sync::oneshot::channel();
+                            tokio::spawn(async move {
+                                let result = backfill_candles(
+                                    &cfg_for_task,
+                                    &symbol_for_task,
+                                    if from_exclusive > 0 { Some(from_exclusive) } else { None },
+                                    missing_limit,
+                                    end_ts_ms,
+                                )
+                                .await;
+                                let _ = tx.send(result);
+                            });
+                            backfill_inflight = Some(rx);
+                        }
+                        continue;
+                    }
+
+                    // In-order or overlapping batch: trim duplicates and apply.
+                    let mut candles = candles;
+                    if start_sequence < expected_next_sequence {
+                        let skip = (expected_next_sequence - start_sequence) as usize;
+                        if skip >= candles.len() {
+                            continue;
+                        }
+                        candles.drain(0..skip);
+                    }
+                    if !candles.is_empty() {
+                        let len = candles.len() as u64;
+                        let _ = sender.send(LiveEvent::CandleBatch {
+                            start_sequence: expected_next_sequence,
+                            candles,
+                        });
+                        expected_next_sequence = expected_next_sequence.saturating_add(len);
+                    }
+
+                    drain_buffered_batches(&sender, &mut expected_next_sequence, &mut buffered);
+
+                    if backfill_inflight.is_none() && should_backfill_gap(expected_next_sequence, &buffered) {
+                        let from_exclusive = expected_next_sequence.saturating_sub(1);
+                        let (end_ts_ms, missing_limit) = buffered_gap_backfill_bounds(&cfg, interval_ms, expected_next_sequence, &buffered);
+                        let cfg_for_task = cfg.clone();
+                        let symbol_for_task = symbol.clone();
+                        let _ = sender.send(LiveEvent::Status(LiveStatus::Backfilling));
+                        let (tx, rx) = tokio::sync::oneshot::channel();
+                        tokio::spawn(async move {
+                            let result = backfill_candles(
+                                &cfg_for_task,
+                                &symbol_for_task,
+                                if from_exclusive > 0 { Some(from_exclusive) } else { None },
+                                missing_limit,
+                                end_ts_ms,
+                            )
+                            .await;
+                            let _ = tx.send(result);
+                        });
+                        backfill_inflight = Some(rx);
+                    }
+                }
+                res = async {
+                    match backfill_inflight.as_mut() {
+                        Some(rx) => Some((&mut *rx).await),
+                        None => future::pending::<
+                            Option<
+                                Result<
+                                    Result<BackfillChunk, String>,
+                                    tokio::sync::oneshot::error::RecvError,
+                                >,
+                            >,
+                        >()
+                        .await,
+                    }
+                } => {
+                    let Some(res) = res else { continue };
+                    backfill_inflight = None;
+                    match res {
+                        Ok(Ok(chunk)) => {
+                            if !chunk.candles.is_empty() {
+                                let chunk_start = chunk.start_sequence;
+                                if chunk_start > expected_next_sequence {
+                                    // Unexpected gap still: buffer the chunk and retry from expected.
+                                    buffered.insert(chunk_start, chunk.candles);
+                                } else {
+                                    let mut candles = chunk.candles;
+                                    if chunk_start < expected_next_sequence {
+                                        let skip = (expected_next_sequence - chunk_start) as usize;
+                                        if skip < candles.len() {
+                                            candles.drain(0..skip);
+                                        } else {
+                                            candles.clear();
+                                        }
+                                    }
+                                    if !candles.is_empty() {
+                                        let len = candles.len() as u64;
+                                        let _ = sender.send(LiveEvent::CandleBatch {
+                                            start_sequence: expected_next_sequence,
+                                            candles,
+                                        });
+                                        expected_next_sequence = expected_next_sequence.saturating_add(len);
+                                    }
+                                }
+                            }
+
+                            drain_buffered_batches(&sender, &mut expected_next_sequence, &mut buffered);
+
+                            if should_backfill_gap(expected_next_sequence, &buffered) {
+                                let from_exclusive = expected_next_sequence.saturating_sub(1);
+                                let (end_ts_ms, missing_limit) = buffered_gap_backfill_bounds(&cfg, interval_ms, expected_next_sequence, &buffered);
+                                let cfg_for_task = cfg.clone();
+                                let symbol_for_task = symbol.clone();
+                                let _ = sender.send(LiveEvent::Status(LiveStatus::Backfilling));
+                                let (tx, rx) = tokio::sync::oneshot::channel();
+                                tokio::spawn(async move {
+                                    let result = backfill_candles(
+                                        &cfg_for_task,
+                                        &symbol_for_task,
+                                        if from_exclusive > 0 { Some(from_exclusive) } else { None },
+                                        missing_limit,
+                                        end_ts_ms,
+                                    )
+                                    .await;
+                                    let _ = tx.send(result);
+                                });
+                                backfill_inflight = Some(rx);
+                            } else {
+                                let _ = sender.send(LiveEvent::Status(LiveStatus::Subscribed));
+                            }
+                        }
+                        Ok(Err(err)) => {
+                            let _ = sender.send(LiveEvent::Error(err));
+                        }
+                        Err(err) => {
+                            let _ = sender.send(LiveEvent::Error(format!("backfill recv failed: {err}")));
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn should_backfill_gap(expected_next_sequence: u64, buffered: &BTreeMap<u64, Vec<Candle>>) -> bool {
+    buffered
+        .keys()
+        .next()
+        .is_some_and(|&start| start > expected_next_sequence)
+}
+
+fn buffered_gap_backfill_bounds(
+    cfg: &LiveConfig,
+    interval_ms: i64,
+    expected_next_sequence: u64,
+    buffered: &BTreeMap<u64, Vec<Candle>>,
+) -> (Option<i64>, u32) {
+    let Some((&start_sequence, candles)) = buffered.iter().next() else {
+        return (None, DEFAULT_BACKFILL_LIMIT);
+    };
+    gap_backfill_bounds(
+        cfg,
+        interval_ms,
+        expected_next_sequence,
+        start_sequence,
+        Some(candles),
+    )
+}
+
+fn gap_backfill_bounds(
+    _cfg: &LiveConfig,
+    interval_ms: i64,
+    expected_next_sequence: u64,
+    next_batch_start_sequence: u64,
+    next_batch: Option<&Vec<Candle>>,
+) -> (Option<i64>, u32) {
+    let missing = next_batch_start_sequence.saturating_sub(expected_next_sequence);
+    let missing_limit = (missing.min(DEFAULT_BACKFILL_LIMIT as u64).max(1)) as u32;
+    let end_ts_ms = next_batch
+        .and_then(|candles| candles.first())
+        .map(|c| (c.timestamp.unix_timestamp_nanos() / 1_000_000) as i64)
+        .and_then(|first_ts| first_ts.checked_sub(interval_ms));
+    (end_ts_ms, missing_limit)
+}
+
+fn drain_buffered_batches(
+    sender: &tokio::sync::mpsc::UnboundedSender<LiveEvent>,
+    expected_next_sequence: &mut u64,
+    buffered: &mut BTreeMap<u64, Vec<Candle>>,
+) {
+    loop {
+        let Some((&start_sequence, _)) = buffered.iter().next() else {
+            break;
+        };
+        if start_sequence > *expected_next_sequence {
+            break;
+        }
+        let mut candles = buffered.remove(&start_sequence).unwrap_or_default();
+        if candles.is_empty() {
+            continue;
+        }
+        if start_sequence < *expected_next_sequence {
+            let skip = (*expected_next_sequence - start_sequence) as usize;
+            if skip >= candles.len() {
+                continue;
+            }
+            candles.drain(0..skip);
+        }
+        if candles.is_empty() {
+            continue;
+        }
+        let len = candles.len() as u64;
+        let _ = sender.send(LiveEvent::CandleBatch {
+            start_sequence: *expected_next_sequence,
+            candles,
+        });
+        *expected_next_sequence = expected_next_sequence.saturating_add(len);
     }
 }
 
@@ -105,6 +469,7 @@ pub fn cursor_key_for(cfg: &LiveConfig, symbol: &str) -> String {
     format!("live_cursor.{}.{}.{}", cfg.source_id, symbol, cfg.interval)
 }
 
+#[allow(dead_code)]
 async fn subscribe_candles_once(
     cfg: &LiveConfig,
     topic: &str,
@@ -119,6 +484,8 @@ async fn subscribe_candles_once(
         .subscribe(topic)
         .await
         .map_err(|e| format!("subscribe failed: {e}"))?;
+
+    let _ = sender.send(LiveEvent::Status(LiveStatus::Subscribed));
 
     loop {
         let msg = socket
@@ -148,6 +515,7 @@ fn encode_backfill_request(
     symbol: &str,
     from_sequence_exclusive: Option<u64>,
     limit: u32,
+    end_ts_ms: Option<i64>,
 ) -> Vec<u8> {
     let mut fbb = flatbuffers::FlatBufferBuilder::new();
     let key = build_stream_key(&mut fbb, cfg, symbol);
@@ -157,8 +525,8 @@ fn encode_backfill_request(
             key: Some(key),
             has_from_sequence: from_sequence_exclusive.is_some(),
             from_sequence_exclusive: from_sequence_exclusive.unwrap_or(0),
-            has_end_ts_ms: false,
-            end_ts_ms: 0,
+            has_end_ts_ms: end_ts_ms.is_some(),
+            end_ts_ms: end_ts_ms.unwrap_or(0),
             limit,
         },
     );
@@ -176,7 +544,7 @@ fn encode_backfill_request(
     fbb.finished_data().to_vec()
 }
 
-fn decode_backfill_response(bytes: &[u8]) -> Result<(u64, Vec<Candle>), String> {
+fn decode_backfill_response(bytes: &[u8]) -> Result<BackfillChunk, String> {
     let env = fb::root_as_envelope(bytes).map_err(|_| "invalid envelope".to_string())?;
     if env.schema_version() != WIRE_SCHEMA_VERSION {
         return Err("unsupported schema_version".to_string());
@@ -195,7 +563,16 @@ fn decode_backfill_response(bytes: &[u8]) -> Result<(u64, Vec<Candle>), String> 
         .message_as_backfill_candles_response()
         .ok_or_else(|| "missing BackfillCandlesResponse body".to_string())?;
     let candles = decode_candles(resp.candles()).map_err(|e| format!("decode candles: {e}"))?;
-    Ok((resp.start_sequence(), candles))
+    let next_sequence = match (resp.has_more(), resp.next_sequence()) {
+        (true, v) if v > 0 => Some(v),
+        _ => None,
+    };
+    Ok(BackfillChunk {
+        start_sequence: resp.start_sequence(),
+        candles,
+        has_more: resp.has_more(),
+        next_sequence,
+    })
 }
 
 fn decode_candle_batch(bytes: &[u8]) -> Result<(u64, Vec<Candle>), String> {
@@ -211,6 +588,49 @@ fn decode_candle_batch(bytes: &[u8]) -> Result<(u64, Vec<Candle>), String> {
         .ok_or_else(|| "missing CandleBatch body".to_string())?;
     let candles = decode_candles(batch.candles()).map_err(|e| format!("decode candles: {e}"))?;
     Ok((batch.start_sequence(), candles))
+}
+
+fn encode_get_cursor_request(cfg: &LiveConfig, symbol: &str) -> Vec<u8> {
+    let mut fbb = flatbuffers::FlatBufferBuilder::new();
+    let key = build_stream_key(&mut fbb, cfg, symbol);
+    let req = fb::GetCursorRequest::create(&mut fbb, &fb::GetCursorRequestArgs { key: Some(key) });
+    let env = fb::Envelope::create(
+        &mut fbb,
+        &fb::EnvelopeArgs {
+            schema_version: WIRE_SCHEMA_VERSION,
+            type_hint: fb::MessageType::GET_CURSOR_REQUEST,
+            correlation_id: None,
+            message_type: fb::Message::GetCursorRequest,
+            message: Some(req.as_union_value()),
+        },
+    );
+    fb::finish_envelope_buffer(&mut fbb, env);
+    fbb.finished_data().to_vec()
+}
+
+fn decode_get_cursor_response(bytes: &[u8]) -> Result<StreamCursor, String> {
+    let env = fb::root_as_envelope(bytes).map_err(|_| "invalid envelope".to_string())?;
+    if env.schema_version() != WIRE_SCHEMA_VERSION {
+        return Err("unsupported schema_version".to_string());
+    }
+    if env.message_type() == fb::Message::ErrorResponse {
+        let msg = env
+            .message_as_error_response()
+            .and_then(|e| e.message().map(|s| s.to_string()))
+            .unwrap_or_else(|| "error response".to_string());
+        return Err(msg);
+    }
+    if env.message_type() != fb::Message::GetCursorResponse {
+        return Err(format!("unexpected message_type {:?}", env.message_type()));
+    }
+    let resp = env
+        .message_as_get_cursor_response()
+        .ok_or_else(|| "missing GetCursorResponse body".to_string())?;
+    let cursor = resp.cursor().ok_or_else(|| "missing cursor".to_string())?;
+    Ok(StreamCursor {
+        latest_sequence: cursor.latest_sequence(),
+        latest_ts_ms: cursor.latest_ts_ms(),
+    })
 }
 
 fn decode_candles(
@@ -492,12 +912,12 @@ mod tests {
             let path = temp_duckdb_path();
             let store = DuckDbStore::new(&path, StorageMode::Disk).expect("store");
 
-            let (start, initial) = super::backfill_candles(&cfg, symbol, None, 3)
+            let chunk = super::backfill_candles(&cfg, symbol, None, 3, None)
                 .await
                 .expect("backfill");
-            assert_eq!(start, 1);
-            assert_eq!(initial.len(), 3);
-            store.write_candles(symbol, &initial).expect("write");
+            assert_eq!(chunk.start_sequence, 1);
+            assert_eq!(chunk.candles.len(), 3);
+            store.write_candles(symbol, &chunk.candles).expect("write");
             store
                 .set_session_value(&cursor_key_for(&cfg, symbol), "3")
                 .expect("cursor");

@@ -1,4 +1,5 @@
 use gpui::{Context, Div, MouseButton, MouseDownEvent, div, prelude::*, px, rgb, rgba};
+use gpui_component::scroll::ScrollableElement;
 
 use crate::chart::view::ChartView;
 use crate::components::button_effect;
@@ -65,13 +66,13 @@ pub fn symbol_search_overlay(view: &mut ChartView, cx: &mut Context<ChartView>) 
         .flex()
         .flex_col()
         .flex_1()
+        .min_h_0()
         .bg(rgb(0x0b1220))
         .border_1()
         .border_color(rgb(0x1f2937))
         .rounded_md()
-        .h_full()
         .id("search-results")
-        .overflow_y_scroll();
+        .overflow_y_scrollbar();
     if filtered.is_empty() {
         results_list = results_list.child(
             div()
@@ -226,6 +227,7 @@ pub fn symbol_search_overlay(view: &mut ChartView, cx: &mut Context<ChartView>) 
                             .flex_col()
                             .gap_2()
                             .h_full()
+                            .min_h_0()
                             .overflow_hidden()
                             .child(
                                 div()

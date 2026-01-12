@@ -235,6 +235,43 @@ fn encode_backfill_response(
     fbb.finished_data().to_vec()
 }
 
+fn encode_get_cursor_response(key: &StreamKeyOwned, candles: &[Candle]) -> Vec<u8> {
+    let latest_sequence = candles.len() as u64;
+    let latest_ts_ms = candles
+        .last()
+        .map(|c| (c.timestamp.unix_timestamp_nanos() / 1_000_000) as i64)
+        .unwrap_or(0);
+
+    let mut fbb = flatbuffers::FlatBufferBuilder::new();
+    let key = build_stream_key(&mut fbb, key);
+    let cursor = fb::Cursor::create(
+        &mut fbb,
+        &fb::CursorArgs {
+            latest_sequence,
+            latest_ts_ms,
+        },
+    );
+    let resp = fb::GetCursorResponse::create(
+        &mut fbb,
+        &fb::GetCursorResponseArgs {
+            key: Some(key),
+            cursor: Some(cursor),
+        },
+    );
+    let env = fb::Envelope::create(
+        &mut fbb,
+        &fb::EnvelopeArgs {
+            schema_version: WIRE_SCHEMA_VERSION,
+            type_hint: fb::MessageType::GET_CURSOR_RESPONSE,
+            correlation_id: None,
+            message_type: fb::Message::GetCursorResponse,
+            message: Some(resp.as_union_value()),
+        },
+    );
+    fb::finish_envelope_buffer(&mut fbb, env);
+    fbb.finished_data().to_vec()
+}
+
 fn encode_error(message: &str) -> Vec<u8> {
     let mut fbb = flatbuffers::FlatBufferBuilder::new();
     let msg = fbb.create_string(message);
@@ -320,51 +357,81 @@ fn main() -> Result<()> {
                     Ok(env) => {
                         if env.schema_version() != WIRE_SCHEMA_VERSION {
                             encode_error("unsupported schema_version")
-                        } else if env.message_type() != fb::Message::BackfillCandlesRequest {
-                            encode_error("unsupported request message_type")
-                        } else if let Some(req) = env.message_as_backfill_candles_request() {
-                            if let Some(req_key) = req.key() {
-                                let req_source = req_key.source_id().unwrap_or("");
-                                let req_symbol = req_key.symbol().unwrap_or("");
-                                let req_interval = req_key.interval().unwrap_or("");
-                                if req_source != rpc_key.source_id
-                                    || req_symbol != rpc_key.symbol
-                                    || req_interval != rpc_key.interval
-                                {
-                                    encode_error("unknown stream key")
-                                } else {
-                                    let from_exclusive = if req.has_from_sequence() {
-                                        req.from_sequence_exclusive()
-                                    } else {
-                                        0
-                                    };
-                                    let start_index = from_exclusive as usize;
-                                    let limit = req.limit() as usize;
-                                    let end_index = if limit == 0 {
-                                        rpc_candles.len()
-                                    } else {
-                                        rpc_candles.len().min(start_index.saturating_add(limit))
-                                    };
-                                    let slice = if start_index < rpc_candles.len() {
-                                        &rpc_candles[start_index..end_index]
-                                    } else {
-                                        &[]
-                                    };
-                                    let has_more = end_index < rpc_candles.len();
-                                    let next_sequence = if has_more { end_index as u64 } else { 0 };
-                                    encode_backfill_response(
-                                        &rpc_key,
-                                        from_exclusive.saturating_add(1),
-                                        slice,
-                                        has_more,
-                                        next_sequence,
-                                    )
-                                }
-                            } else {
-                                encode_error("missing key")
-                            }
                         } else {
-                            encode_error("invalid BackfillCandlesRequest body")
+                            match env.message_type() {
+                                fb::Message::BackfillCandlesRequest => {
+                                    match env.message_as_backfill_candles_request() {
+                                        Some(req) => match req.key() {
+                                            Some(req_key) => {
+                                                let req_source = req_key.source_id().unwrap_or("");
+                                                let req_symbol = req_key.symbol().unwrap_or("");
+                                                let req_interval = req_key.interval().unwrap_or("");
+                                                if req_source != rpc_key.source_id
+                                                    || req_symbol != rpc_key.symbol
+                                                    || req_interval != rpc_key.interval
+                                                {
+                                                    encode_error("unknown stream key")
+                                                } else {
+                                                    let from_exclusive = if req.has_from_sequence()
+                                                    {
+                                                        req.from_sequence_exclusive()
+                                                    } else {
+                                                        0
+                                                    };
+                                                    let start_index = from_exclusive as usize;
+
+                                                    let max_index_exclusive =
+                                                        if req.has_end_ts_ms() {
+                                                            let end_ts_ms = req.end_ts_ms();
+                                                            rpc_candles.partition_point(|c| {
+                                                                (c.timestamp.unix_timestamp_nanos()
+                                                                    / 1_000_000)
+                                                                    as i64
+                                                                    <= end_ts_ms
+                                                            })
+                                                        } else {
+                                                            rpc_candles.len()
+                                                        }
+                                                        .max(start_index);
+
+                                                    let limit = req.limit() as usize;
+                                                    let end_index = if limit == 0 {
+                                                        max_index_exclusive
+                                                    } else {
+                                                        max_index_exclusive.min(
+                                                            start_index
+                                                                .saturating_add(limit.max(1)),
+                                                        )
+                                                    };
+                                                    let slice = if start_index < rpc_candles.len()
+                                                        && start_index < end_index
+                                                    {
+                                                        &rpc_candles[start_index..end_index]
+                                                    } else {
+                                                        &[]
+                                                    };
+                                                    let has_more = end_index < max_index_exclusive;
+                                                    let next_sequence =
+                                                        if has_more { end_index as u64 } else { 0 };
+                                                    encode_backfill_response(
+                                                        &rpc_key,
+                                                        from_exclusive.saturating_add(1),
+                                                        slice,
+                                                        has_more,
+                                                        next_sequence,
+                                                    )
+                                                }
+                                            }
+                                            None => encode_error("missing key"),
+                                        },
+                                        None => encode_error("invalid BackfillCandlesRequest body"),
+                                    }
+                                }
+                                fb::Message::GetCursorRequest => {
+                                    encode_get_cursor_response(&rpc_key, &rpc_candles)
+                                }
+                                _ => encode_error("unsupported request message_type"),
+                            }
                         }
                     }
                     Err(_) => encode_error("invalid envelope"),

@@ -18,8 +18,8 @@ use crate::data::{
     universe::{SymbolSearchEntry, load_universe, load_universe_from_store},
 };
 use crate::live::{
-    DEFAULT_BACKFILL_LIMIT, LiveConfig, LiveEvent, backfill_candles, cursor_key_for,
-    subscribe_candles, tokio_runtime,
+    DEFAULT_BACKFILL_LIMIT, LiveConfig, LiveEvent, LiveStatus, backfill_candles, cursor_key_for,
+    get_cursor, run_live_coordinator, tokio_runtime,
 };
 use crate::perf::{PerfSpec, generate_perf_candles, parse_perf_source, perf_label};
 use core::DuckDbStore;
@@ -139,6 +139,19 @@ fn normalize_resamples(
     cache
 }
 
+fn format_age(age: std::time::Duration) -> String {
+    let secs = age.as_secs_f64();
+    if secs < 1.0 {
+        format!("{:.0}ms ago", secs * 1_000.0)
+    } else if secs < 60.0 {
+        format!("{secs:.1}s ago")
+    } else if secs < 3600.0 {
+        format!("{:.1}m ago", secs / 60.0)
+    } else {
+        format!("{:.1}h ago", secs / 3600.0)
+    }
+}
+
 pub struct ChartView {
     pub(super) focus_handle: FocusHandle,
     pub(super) base_candles: Arc<[Candle]>,
@@ -158,6 +171,8 @@ pub struct ChartView {
     live_task: Option<tokio::task::JoinHandle<()>>,
     pub(super) live_blink_on: bool,
     live_last_event: Option<Instant>,
+    pub(super) live_status: LiveStatus,
+    pub(super) live_last_error: Option<String>,
     pub(super) view_offset: f32,
     pub(super) zoom: f32,
     pub(super) root_origin: (f32, f32),
@@ -243,6 +258,8 @@ impl ChartView {
             live_task: None,
             live_blink_on: false,
             live_last_event: None,
+            live_status: LiveStatus::Disconnected,
+            live_last_error: None,
             view_offset: 0.0,
             zoom: 1.0,
             root_origin: (0.0, 0.0),
@@ -535,6 +552,8 @@ impl ChartView {
         self.live_last_sequence = 0;
         self.live_blink_on = false;
         self.live_last_event = None;
+        self.live_status = LiveStatus::Disconnected;
+        self.live_last_error = None;
         if let Some(task) = self.live_task.take() {
             task.abort();
         }
@@ -718,13 +737,44 @@ impl ChartView {
                             let cfg_for_backfill = cfg.clone();
                             let symbol_for_backfill = symbol_for_task.clone();
                             let handle = tokio_runtime().spawn(async move {
-                                backfill_candles(
-                                    &cfg_for_backfill,
-                                    &symbol_for_backfill,
-                                    last_sequence,
-                                    DEFAULT_BACKFILL_LIMIT,
-                                )
-                                .await
+                                let cursor = get_cursor(&cfg_for_backfill, &symbol_for_backfill)
+                                    .await
+                                    .ok();
+                                let end_ts_ms = cursor
+                                    .map(|c| {
+                                        if c.latest_ts_ms == 0 {
+                                            None
+                                        } else {
+                                            Some(c.latest_ts_ms)
+                                        }
+                                    })
+                                    .flatten();
+
+                                let mut from_sequence = last_sequence;
+                                let mut start_sequence =
+                                    from_sequence.unwrap_or(0).saturating_add(1);
+                                let mut candles = Vec::new();
+                                loop {
+                                    let chunk = backfill_candles(
+                                        &cfg_for_backfill,
+                                        &symbol_for_backfill,
+                                        from_sequence,
+                                        DEFAULT_BACKFILL_LIMIT,
+                                        end_ts_ms,
+                                    )
+                                    .await?;
+                                    if candles.is_empty() {
+                                        start_sequence = chunk.start_sequence;
+                                    }
+                                    let len = chunk.candles.len();
+                                    candles.extend(chunk.candles);
+                                    if !chunk.has_more || chunk.next_sequence.is_none() || len == 0
+                                    {
+                                        break;
+                                    }
+                                    from_sequence = chunk.next_sequence;
+                                }
+                                Ok((start_sequence, candles))
                             });
 
                             let result = match handle.await {
@@ -959,7 +1009,13 @@ impl ChartView {
                             } else {
                                 self.live_last_sequence = 0;
                             }
-                            self.start_live_subscription(*load_id, symbol.clone(), window, cx);
+                            self.start_live_subscription(
+                                *load_id,
+                                symbol.clone(),
+                                self.live_last_sequence,
+                                window,
+                                cx,
+                            );
                         }
                         persist_snapshot = Some(PersistSnapshot {
                             store: self.store.clone(),
@@ -1010,18 +1066,24 @@ impl ChartView {
         &mut self,
         load_id: u64,
         symbol: String,
+        last_applied_sequence: u64,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         self.stop_live_subscription();
         self.live_generation = load_id;
+        self.live_last_sequence = last_applied_sequence;
+        self.live_status = LiveStatus::Connecting;
+        self.live_last_error = None;
 
         let (tx, mut rx) = mpsc::unbounded_channel::<LiveEvent>();
         let cfg = self.live_config.clone();
         let entity = cx.entity();
 
         self.live_task = Some(tokio_runtime().spawn(async move {
-            if let Err(err) = subscribe_candles(cfg, symbol, tx.clone()).await {
+            if let Err(err) =
+                run_live_coordinator(cfg, symbol, last_applied_sequence, tx.clone()).await
+            {
                 let _ = tx.send(LiveEvent::Error(err));
             }
         }));
@@ -1048,16 +1110,21 @@ impl ChartView {
 
     fn apply_live_event(&mut self, event: LiveEvent, cx: &mut Context<Self>) {
         match event {
+            LiveEvent::Status(status) => {
+                self.live_status = status;
+            }
             LiveEvent::CandleBatch {
                 start_sequence,
                 candles,
             } => {
                 self.live_blink_on = !self.live_blink_on;
                 self.live_last_event = Some(Instant::now());
+                self.live_status = LiveStatus::Subscribed;
+                self.live_last_error = None;
                 self.append_live_batch(start_sequence, candles, cx)
             }
             LiveEvent::Error(err) => {
-                self.load_error = Some(err);
+                self.live_last_error = Some(err);
             }
         }
     }
@@ -1069,14 +1136,53 @@ impl ChartView {
         if !self.live_mode {
             return 0x6b7280;
         }
-        let is_recent = self
-            .live_last_event
-            .map(|t| t.elapsed() < std::time::Duration::from_secs(2))
-            .unwrap_or(false);
-        if is_recent && self.live_blink_on {
-            0x22c55e
-        } else {
-            0x16a34a
+        match self.live_status {
+            LiveStatus::Disconnected => 0x6b7280,
+            LiveStatus::Connecting => 0x3b82f6,
+            LiveStatus::Backfilling => 0xf59e0b,
+            LiveStatus::Subscribed => {
+                let Some(t) = self.live_last_event else {
+                    return 0x06b6d4;
+                };
+                let age = t.elapsed();
+                if age > std::time::Duration::from_secs(2) {
+                    return 0xef4444;
+                }
+                if self.live_blink_on {
+                    0x22c55e
+                } else {
+                    0x16a34a
+                }
+            }
+        }
+    }
+
+    pub(super) fn playback_labels(&self) -> (String, Option<String>) {
+        if self.replay_enabled() {
+            return ("Replay".to_string(), None);
+        }
+        if !self.live_mode {
+            return ("Static".to_string(), None);
+        }
+
+        match self.live_status {
+            LiveStatus::Disconnected => (
+                "Disconnected".to_string(),
+                self.live_last_error.as_deref().map(|_| "Error".to_string()),
+            ),
+            LiveStatus::Connecting => ("Connecting".to_string(), None),
+            LiveStatus::Backfilling => ("Backfill".to_string(), Some("Repairing gap".to_string())),
+            LiveStatus::Subscribed => {
+                let Some(t) = self.live_last_event else {
+                    return ("Subscribed".to_string(), Some("Idle".to_string()));
+                };
+                let age = t.elapsed();
+                if age > std::time::Duration::from_secs(2) {
+                    ("Stalled".to_string(), Some(format_age(age)))
+                } else {
+                    ("Live".to_string(), Some(format_age(age)))
+                }
+            }
         }
     }
 

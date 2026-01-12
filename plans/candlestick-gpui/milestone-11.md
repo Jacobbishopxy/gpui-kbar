@@ -29,19 +29,18 @@ Plan
      - Persist generated/replayed candles in memory (at minimum) so REP backfill can serve missing ranges.
 
 2) Schema: add "stream status / watermark" messages in `flux-schema`
-   - Extend `../flux/crates/flux-schema/schemas/market_data.fbs` with:
-     - `StreamStatusRequest { key }`
-     - `StreamStatusResponse { key, latest_sequence, latest_ts_ms, server_time_ms }`
-   - Generate/update Rust bindings in `flux-schema` and bump/propagate `WIRE_SCHEMA_VERSION`.
-   - Compatibility: keep existing CandleBatch + BackfillCandlesRequest/Response unchanged so older clients still work if they ignore status.
+   - Use the existing cursor/watermark contract already in the schema:
+     - `GetCursorRequest { key }`
+     - `GetCursorResponse { key, cursor: Cursor { latest_sequence, latest_ts_ms } }`
+   - No schema bump needed; implement REP handler on the server/dev harness and use it client-side to bound backfill.
 
 3) Client: implement a live coordinator that can backfill concurrently
    - Update `ui/src/live.rs`:
-     - Add encode/decode helpers for `StreamStatus*`.
-     - Return full backfill metadata (start_sequence, candles, has_more, next_sequence) so backfill can be chunked.
+     - Add encode/decode helpers for `GetCursor*`.
+     - Return full backfill metadata (start_sequence, candles, has_more, next_sequence) so backfill can be chunked and bounded.
    - Add a "live coordinator" layer (new module or inside `ChartView`) that:
      - Starts SUB immediately and buffers CandleBatch events.
-     - Fetches the server watermark via REP (status request) to define the backfill target.
+     - Fetches the server watermark via REP (GetCursor) to define the backfill target.
      - Runs backfill from the persisted cursor up to the target while SUB continues receiving.
      - Merges: apply backfill first, then drain buffered live batches in sequence order; dedup by timestamp (and sequence when available).
      - On detected gaps during steady-state (incoming `start_sequence` > expected), trigger a targeted backfill in the background and merge when ready.
@@ -60,10 +59,10 @@ Validation
 Status
 
 - [x] CLI harness/demo publishes FlatBuffers over ZMQ and verifies DuckDB round-trip (`dev/src/bin/flux_mock_replay.rs`, `ui/src/live.rs`).
-- [ ] GPUI dev server controller with fault injection.
-- [ ] `flux-schema` adds stream status/watermark messages and versioning.
-- [ ] Client gap handling: concurrent backfill + merge/dedup + cursor persistence.
-- [ ] Footer shows connection/receive health + last-update age.
+- [x] GPUI dev server controller with fault injection (`dev/src/bin/flux_dev_server.rs`).
+- [x] Watermark/status contract uses existing `GetCursorRequest/Response` (no schema bump); implemented in dev harness and mock server.
+- [x] Client gap handling: concurrent backfill + merge/ordering + cursor persistence (`ui/src/live.rs`, `ui/src/chart/view/state.rs`).
+- [x] Footer shows connection/receive health + last-update age (`ui/src/chart/footer.rs`, `ui/src/chart/view/state.rs`).
 
 Backend notes (Flux)
 
@@ -71,5 +70,5 @@ Backend notes (Flux)
 - Wire schema source of truth: `../flux/crates/flux-schema/schemas/market_data.fbs`.
 - Implement REP handlers on `tcp://127.0.0.1:5557`:
   - Backfill (existing): `BackfillCandlesRequest -> BackfillCandlesResponse`
-  - Status (new): `StreamStatusRequest -> StreamStatusResponse` (watermark)
+  - Watermark/status (existing): `GetCursorRequest -> GetCursorResponse` (cursor.latest_sequence + cursor.latest_ts_ms)
 - Expected sockets (defaults used by the app): `tcp://127.0.0.1:5556` (PUB) and `tcp://127.0.0.1:5557` (REQ/REP).

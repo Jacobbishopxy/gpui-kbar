@@ -33,6 +33,7 @@ pub(super) fn chart_footer(
     candle_count: usize,
     range_text: SharedString,
     playback_label: SharedString,
+    playback_detail: Option<SharedString>,
     playback_dot_hex: u32,
     timezone_label: SharedString,
 ) -> Div {
@@ -57,6 +58,11 @@ pub(super) fn chart_footer(
                 .text_sm()
                 .text_color(rgb(0xe5e7eb))
                 .child(playback_label.clone())
+                .child(
+                    playback_detail
+                        .map(|detail| div().text_xs().text_color(rgb(0x9ca3af)).child(detail))
+                        .unwrap_or_else(|| div()),
+                )
                 .child(
                     div()
                         .text_xs()

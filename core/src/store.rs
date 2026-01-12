@@ -285,7 +285,18 @@ impl DuckDbStore {
             conn.execute_batch(&format!(
                 "INSERT INTO universe
                  SELECT filters, badge, symbol, name, market, venue
-                 FROM read_csv_auto('{sql_path}', HEADER=true);"
+                 FROM (
+                    SELECT
+                        filters,
+                        badge,
+                        symbol,
+                        name,
+                        market,
+                        venue,
+                        row_number() OVER (PARTITION BY symbol ORDER BY symbol) AS rn
+                    FROM read_csv_auto('{sql_path}', HEADER=true)
+                 )
+                 WHERE rn = 1;"
             ))?;
         }
 
