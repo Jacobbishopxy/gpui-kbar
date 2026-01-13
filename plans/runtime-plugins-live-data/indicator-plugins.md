@@ -3,6 +3,10 @@
 Date: 2026-01-10
 Scope: `core/ui/app` indicator architecture + plugin loading
 
+Execution milestone (this repo)
+
+- `plans/candlestick-gpui/milestone-12.md` is the current owner for implementing Phase 0/1/3 of this plan (plugin ABI/loader work may land in a follow-up milestone).
+
 Problem statement
 
 We can’t persist “indicator caches” until:
@@ -37,65 +41,65 @@ Deliverables
 
 1) Indicator core model (no plugins yet)
 
-- Define “indicator definition”:
-  - `IndicatorId` (stable string, e.g. `com.example.rsi`)
-  - `DisplayName`
-  - `Version` (semantic or integer ABI-independent version)
-  - `Inputs` (required data series: candles, volume, etc.)
-  - `Params` schema (typed: bool/int/float/string/enum; with defaults, ranges, formatting)
-  - `Outputs` schema (named series + style hints: line/histogram, color, y-axis group)
-- Define compute interface:
-  - Batch compute: `compute_all(candles, params) -> outputs`
-  - Streaming compute: `init(params) -> state`, `update(state, new_candles) -> output_deltas`
-  - Determinism requirements: same inputs => same outputs; stable rounding rules.
-- Define cache model:
-  - Cache key: `(indicator_id, indicator_version, params_hash, symbol, interval, source_id, candles_revision)`
-  - Cache payload:
-    - outputs (compressed arrays)
-    - state snapshot (optional; for streaming indicators)
-    - metadata: last candle timestamp + cursor/revision used
+    - Define “indicator definition”:
+      - `IndicatorId` (stable string, e.g. `com.example.rsi`)
+      - `DisplayName`
+      - `Version` (semantic or integer ABI-independent version)
+      - `Inputs` (required data series: candles, volume, etc.)
+      - `Params` schema (typed: bool/int/float/string/enum; with defaults, ranges, formatting)
+      - `Outputs` schema (named series + style hints: line/histogram, color, y-axis group)
+    - Define compute interface:
+      - Batch compute: `compute_all(candles, params) -> outputs`
+      - Streaming compute: `init(params) -> state`, `update(state, new_candles) -> output_deltas`
+      - Determinism requirements: same inputs => same outputs; stable rounding rules.
+    - Define cache model:
+      - Cache key: `(indicator_id, indicator_version, params_hash, symbol, interval, source_id, candles_revision)`
+      - Cache payload:
+        - outputs (compressed arrays)
+        - state snapshot (optional; for streaming indicators)
+        - metadata: last candle timestamp + cursor/revision used
 
-2) Plugin ABI v1 (SDK + host)
+1) Plugin ABI v1 (SDK + host)
 
-- Define a C-compatible ABI module (`indicator_sdk::abi`), including:
-  - `INDICATOR_ABI_VERSION` (u32)
-  - `PluginManifest` (plugin name, plugin version, supported ABI version range)
-  - `IndicatorDescriptor` (id/name/version, params schema, outputs schema)
-  - `HostApi` callbacks (logging, allocation helpers, maybe time)
-  - `IndicatorVTable` (function pointers):
-    - `create_instance(params_bytes) -> *mut Instance`
-    - `free_instance(*mut Instance)`
-    - `compute_all(instance, candles_view, outputs_sink) -> Status`
-    - `update(instance, appended_candles_view, outputs_sink) -> Status`
-    - `snapshot_state(instance, sink) -> Status`
-    - `restore_state(instance, bytes) -> Status`
-  - `Status` + error string retrieval (avoid Rust panics across boundary)
-  - Byte encoding: prefer `rkyv` or `bincode` for params/state blobs, but treat as “opaque bytes” at ABI level.
-- Define a single exported entrypoint symbol, e.g.:
-  - `kbar_indicator_plugin_entry_v1(host_api: *const HostApi) -> *const PluginApiV1`
-- Implement loading via `libloading` in the app, with:
-  - ABI/version check + manifest read
-  - descriptor registration into a runtime registry
-  - crash containment strategy (initially: propagate errors; later: isolate/sandbox)
+    - Define a C-compatible ABI module (`indicator_sdk::abi`), including:
+      - `INDICATOR_ABI_VERSION` (u32)
+      - `PluginManifest` (plugin name, plugin version, supported ABI version range)
+      - `IndicatorDescriptor` (id/name/version, params schema, outputs schema)
+      - `HostApi` callbacks (logging, allocation helpers, maybe time)
+      - `IndicatorVTable` (function pointers):
+        - `create_instance(params_bytes) -> *mut Instance`
+        - `free_instance(*mut Instance)`
+        - `compute_all(instance, candles_view, outputs_sink) -> Status`
+        - `update(instance, appended_candles_view, outputs_sink) -> Status`
+        - `snapshot_state(instance, sink) -> Status`
+        - `restore_state(instance, bytes) -> Status`
+      - `Status` + error string retrieval (avoid Rust panics across boundary)
+      - Byte encoding: prefer `rkyv` or `bincode` for params/state blobs, but treat as “opaque bytes” at ABI level.
+    - Define a single exported entrypoint symbol, e.g.:
+      - `kbar_indicator_plugin_entry_v1(host_api: *const HostApi) -> *const PluginApiV1`
+    - Implement loading via `libloading` in the app, with:
+      - ABI/version check + manifest read
+      - descriptor registration into a runtime registry
+      - crash containment strategy (initially: propagate errors; later: isolate/sandbox)
 
-3) Runtime UX
+1) Runtime UX
 
-- Settings: “Plugins” section:
-  - Choose folder (file picker)
-  - Scan and list discovered plugins
-  - Enable/disable per-plugin and per-indicator
-  - Show compatibility/ABI mismatch errors inline
-  - “Reload plugins” action
-- Remember plugin folder + enabled states in DuckDB user session (similar to other settings).
+    - Settings: “Plugins” section:
+      - Choose folder (file picker)
+      - Scan and list discovered plugins
+      - Enable/disable per-plugin and per-indicator
+      - Show compatibility/ABI mismatch errors inline
+      - “Reload plugins” action
+    - Remember plugin folder + enabled states in DuckDB user session (similar to other settings).
 
-4) Persistence hooks (to unblock indicator cache persistence milestone)
+1) Persistence hooks (to unblock indicator cache persistence milestone)
 
-- Define how the chart runtime requests indicator outputs:
-  - “attach indicator” to chart state
-  - compute in background executor
-  - cache results keyed by above cache key
-  - when restoring session: load cached outputs/state first, then resume updates with new candles
-- Ensure plugin indicators and built-in indicators share the same cache schema.
+    - Define how the chart runtime requests indicator outputs:
+      - “attach indicator” to chart state
+      - compute in background executor
+      - cache results keyed by above cache key
+      - when restoring session: load cached outputs/state first, then resume updates with new candles
+    - Ensure plugin indicators and built-in indicators share the same cache schema.
 
 Plan (phased)
 
@@ -164,4 +168,3 @@ Status
 - [ ] Phase 1 indicator model + built-ins.
 - [ ] Phase 2 plugin SDK + runtime loader.
 - [ ] Phase 3 persistence + restore to unblock “indicator caches persisted/restored”.
-

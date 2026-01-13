@@ -35,13 +35,13 @@ Status
 - [x] DuckDB-backed caching + session restore for active symbol/interval/range/replay/watchlist wired into runtime + watchlist; symbol catalog (data/symbols.csv) now drives watchlist display/load paths with add/remove persistence.
 - [x] User session snapshot struct added (active source, interval, range, replay, watchlist) with single-call hydration; candle writes/readbacks de-duped per timestamp to prevent duplication on restore.
 - [x] Split persistent storage into `data/config.duckdb` (session_state/watchlist) + `data/data.duckdb` (candles/indicator_values/universe) with legacy `data/cache.duckdb` migration.
-- [ ] Indicator caches persisted/restored via DuckDB.
-- [ ] Implement overlays/drawings/interactions polish; snapshot tests/perf passes.
+- [x] Indicator caches persisted/restored via DuckDB. (moved to `plans/candlestick-gpui/milestone-12.md`)
+- [x] Implement overlays/drawings/interactions polish; snapshot tests/perf passes. (moved to `plans/candlestick-gpui/milestone-12.md`)
 
 Next up
 
-1) Persist indicator caches in DuckDB alongside candles/session and hydrate on startup.
+1) Persist indicator caches in DuckDB alongside candles/session and hydrate on startup. (moved to `plans/candlestick-gpui/milestone-12.md`)
 2) Hook interval presets to real keyboard shortcuts and highlight active interval in header.
 3) Make timezone dynamic (system or exchange tz) and surface actual replay state (paused/playing, speed).
-4) Start overlay/drawing scaffolding (MA overlay toggle + basic trendline gestures).
-5) Add a minimal snapshot/render test using sample CSV to guard UI regressions.
+4) Start overlay/drawing scaffolding (MA overlay toggle + basic trendline gestures). (moved to `plans/candlestick-gpui/milestone-12.md`)
+5) Add a minimal snapshot/render test using sample CSV to guard UI regressions. (moved to `plans/candlestick-gpui/milestone-12.md`)
